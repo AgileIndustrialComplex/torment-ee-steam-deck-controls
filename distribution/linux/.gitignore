@@ -1,0 +1,6 @@
+# Real mod binaries are never committed: tests pull them from a release ZIP
+# (PSTEE_PREVIEW_ZIP) or PSTEE_PAYLOAD_DIR.
+.payload-cache/
+payload/
+__pycache__/
+*.pyc

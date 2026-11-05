@@ -1,0 +1,53 @@
+name: linux-installer
+
+on:
+  push:
+    paths:
+      - 'distribution/linux/**'
+      - '.github/workflows/linux-installer.yml'
+  pull_request:
+    paths:
+      - 'distribution/linux/**'
+      - '.github/workflows/linux-installer.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # SteamOS 3.5+ ships 3.11; 3.9 is the practical floor for the port.
+        python: ['3.9', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Byte-compile
+        working-directory: distribution/linux
+        run: python -m py_compile install.py test_install.py
+
+      - name: Shell syntax
+        working-directory: distribution/linux
+        run: |
+          bash -n install-deck.sh
+          bash -n uninstall-deck.sh
+
+      - name: Fetch preview payload
+        # The tests need the real binaries; they are not committed.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(grep -oP 'RELEASE_VERSION = "\K[^"]+' distribution/linux/install.py)
+          echo "payload version: $version"
+          url="https://github.com/NiksonLichev/planescape-torment-enhanced-edition-xbox-controller-mod/releases/download/v$version/PSTEE-Xbox-Controller-v$version-preview.zip"
+          curl -fsSL "$url" -o "$RUNNER_TEMP/preview.zip"
+          echo "PSTEE_PREVIEW_ZIP=$RUNNER_TEMP/preview.zip" >> "$GITHUB_ENV"
+
+      - name: Installer tests
+        working-directory: distribution/linux
+        run: python test_install.py
