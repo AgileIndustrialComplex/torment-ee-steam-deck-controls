@@ -17,8 +17,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # SteamOS 3.5+ ships 3.11; 3.9 is the practical floor for the port.
-        python: ['3.9', '3.11', '3.12']
+        # SteamOS 3.5+ ships 3.11. The runner image no longer provides older
+        # interpreters, so 3.10 is the lowest version actually exercised here.
+        python: ['3.10', '3.11', '3.12']
     steps:
       - uses: actions/checkout@v4
 
