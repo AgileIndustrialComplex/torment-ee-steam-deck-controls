@@ -13,6 +13,33 @@ dialogue, menu navigation and a compact two-page radial menu.
 Extract the complete ZIP and run **Install.cmd**.
 
 The source ZIP is for developers and is not a ready-to-install package.
+## Linux and Steam Deck
+
+The same mod runs under Proton, but the PowerShell installer does not. A
+stdlib-Python installer with the same file semantics lives in
+**[distribution/linux](distribution/linux/README.md)**; it auto-detects the
+Steam library and installs from Konsole with no root:
+
+```bash
+bash distribution/linux/install-deck.sh
+```
+
+Two things differ from the Windows instructions above:
+
+- **Force Proton for the game** (Steam > Properties > Compatibility). Steam
+  ships a native Linux build with no `Torment.exe`, and the mod is a Windows
+  DLL injection, so the Windows depot is required.
+- **Keep Steam Input enabled** with a gamepad-only template. The Linux section
+  reads XInput, which is what Steam Input provides for the Deck's built-in pad;
+  disabling it there means the mod receives no input. The *Disable Steam Input*
+  advice in step 4 above applies to a physical Xbox pad on Windows only.
+
+Because the launcher must be the process Steam starts, Linux also needs this
+Launch Option:
+
+```
+echo "%command%" | sed 's|Torment[.]exe|ControllerLab.exe|' | sh
+```
 ## Screenshots
 
 <img width="1919" height="1079" alt="Screenshot 2026-10-15 164750" src="https://github.com/user-attachments/assets/43535f1c-fd88-41dd-8664-3f98a46e8fba" />
@@ -91,8 +118,9 @@ for manual recovery. Do not delete `.pstcontroller` to bypass an install error.
 - Supported executable: Windows x64 PST:EE **3.2.2.0**, SHA-256
   `99ae15860cfdbcdaad0f48e005eee21444046b21de848c1deab9367e8246a3c5`.
   Other Steam/GOG executable fingerprints are refused until examined.
-- Xbox/XInput controllers. Linux/Proton, Steam Deck and other controller APIs
-  have not been verified.
+- Xbox/XInput controllers. The Linux/Steam Deck installer is in
+  `distribution/linux`, but DLL injection under Proton is still unverified;
+  other controller APIs remain untested.
 - Requires stock UI; other custom UI mods are not merged automatically.
 - Main controls have automated checks and selected in-game validation. A full
   campaign/menu playtest is still pending. Text entry uses the keyboard; some
