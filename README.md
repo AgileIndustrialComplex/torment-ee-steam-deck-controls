@@ -1,6 +1,6 @@
-# PST:EE Xbox Controller Mod - preview 0.1.31
+# PST:EE Steam Deck Controller Mod
 
-Xbox/XInput controller support for Planescape: Torment Enhanced Edition on
+Xbox/XInput/Steam Deck controller support for Planescape: Torment Enhanced Edition on
 Windows x64: character and party movement, camera control, nearby interaction,
 dialogue, menu navigation and a compact two-page radial menu.
 
@@ -154,3 +154,4 @@ python -B controller-lab/test_distribution.py
 ## Credits
 
 Created by NiksonLichev with development assistance from OpenAI Codex.
+Modified by Adam Jedrzejewski with development assistance from Hermes Agent and DeepSeek V4.1 Flash 1017.
