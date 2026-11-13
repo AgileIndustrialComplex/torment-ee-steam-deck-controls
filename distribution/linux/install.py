@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Install the PST:EE Xbox Controller Mod on Linux / Steam Deck.
 
-The upstream mod ships a PowerShell installer plus a Windows launcher that
-injects a DLL into a suspended Torment.exe. That works under Proton, but the
-installer itself needs PowerShell. This is a stdlib-only port that performs the
-same file operations natively, so it runs inside Konsole on SteamOS.
+Two game builds are supported:
+
+  * native Linux (the Steam Deck default): the mod is a shared object loaded
+    by the game's own Lua through package.loadlib, so no launcher, no
+    Proton and no launch options are involved. The installer only writes the
+    mod files; press Play in Steam as usual.
+  * Windows under Proton: the upstream mod's DLL is injected into a suspended
+    Torment.exe by its launcher; the launch option swaps the executable.
 
 Usage:
     python3 install.py detect                      # find the game + report state
@@ -36,9 +40,10 @@ import zipfile
 from pathlib import Path
 
 APPID = "466300"
-RELEASE_VERSION = "0.1.31"
+RELEASE_VERSION = "0.2.0"
 _ARCHIVE = f"PSTEE-Xbox-Controller-v{RELEASE_VERSION}-preview.zip"
-# The binaries come from upstream's releases. Set PSTEE_MOD_SOURCE to a repo
+_NATIVE_ARCHIVE = f"PSTEE-Native-Controller-v{RELEASE_VERSION}-preview.zip"
+# Windows binaries come from upstream's releases. Set PSTEE_MOD_SOURCE to a repo
 # slug (e.g. a fork that publishes its own release) to override.
 RELEASE_REPOS = (
     os.environ.get("PSTEE_MOD_SOURCE"),
@@ -49,10 +54,25 @@ RELEASE_URLS = tuple(
     for repo in RELEASE_REPOS
     if repo
 )
+# The native Linux payload is published by this project's releases; the
+# upstream mod has no Linux binary.
+NATIVE_RELEASE_REPOS = (
+    os.environ.get("PSTEE_MOD_SOURCE"),
+    "AgileIndustrialComplex/torment-ee-steam-deck-controls",
+)
+NATIVE_RELEASE_URLS = tuple(
+    f"https://github.com/{repo}/releases/download/v{RELEASE_VERSION}/{_NATIVE_ARCHIVE}"
+    for repo in NATIVE_RELEASE_REPOS
+    if repo
+)
 SUPPORTED_EXE_SHA256 = "99ae15860cfdbcdaad0f48e005eee21444046b21de848c1deab9367e8246a3c5"
+# Linux Torment (Steam depot 466304, same 3.2.2.0 content as the Windows
+# target: the stock UI.menu hash is byte-identical).
+SUPPORTED_NATIVE_SHA256 = "e615763edb57427e3efded67296c357e2563ee40ebc2aef929e1f180e1b5846e"
+LINUX_BINARY = "Torment"
 
 STATE_DIR = ".pstee-controller-deck"
-MOD_FILES = [
+MOD_FILES_WINDOWS = [
     "engine.lua",
     "ControllerLab.exe",
     "override/M_PSTPAD.lua",
@@ -61,8 +81,20 @@ MOD_FILES = [
     "override/PSTPRAD.bam",
     "override/PSTPSEL.bam",
 ]
+MOD_FILES_NATIVE = [
+    "engine.lua",
+    "override/M_PSTPAD.lua",
+    "override/libpstcontroller.so",
+    "override/UI.menu",
+    "override/PSTPRAD.bam",
+    "override/PSTPSEL.bam",
+]
 PROFILE_OLD = "Planescape Torment - Enhanced Edition"
 PROFILE_NEW = "Planescape Torment - Controller Lab"
+
+
+def mod_files(platform: str) -> list[str]:
+    return MOD_FILES_NATIVE if platform == "native" else MOD_FILES_WINDOWS
 
 
 class InstallError(Exception):
@@ -169,35 +201,56 @@ def looks_like_game(path: Path) -> bool:
     return (path / "chitin.key").is_file() and (path / "engine.lua").is_file()
 
 
-def resolve_game(game_dir: str | None) -> Path:
+def game_platform(path: Path) -> str | None:
+    """'native' for the Linux ELF layout, 'windows' for Torment.exe, else None."""
+    if (path / "Torment.exe").is_file():
+        return "windows"
+    if (path / LINUX_BINARY).is_file() or (path / "game" / LINUX_BINARY).is_file():
+        return "native"
+    return None
+
+
+def resolve_game(game_dir: str | None) -> tuple[Path, str]:
+    """Return (game_folder, platform).
+
+    The native Steam layout keeps chitin.key and the Torment ELF next to each
+    other; the GOG layout nests both inside a game/ subfolder, which resolves
+    to that subfolder.
+    """
     if game_dir:
         path = Path(game_dir).expanduser().resolve()
+        if not looks_like_game(path):
+            nested = path / "game"
+            if looks_like_game(nested):
+                path = nested
         if not looks_like_game(path):
             raise InstallError(
                 f"{path} is not a PST:EE game folder (no chitin.key/engine.lua)."
             )
-        if not (path / "Torment.exe").is_file():
+        platform = game_platform(path)
+        if platform is None:
             raise InstallError(
-                f"No Torment.exe in {path}.\n"
-                "On Steam Deck the game defaults to the native Linux build. Force Proton first:\n"
-                "  Steam > this game > Properties > Compatibility >\n"
-                "  'Force the use of a specific Steam Play compatibility tool' > Proton 9.0 or newer.\n"
-                "Wait for the Windows depot to download, then re-run this installer."
+                f"No game executable found in {path}.\n"
+                "Expected the Linux 'Torment' binary or a Windows 'Torment.exe'."
             )
-        return path
+        return path, platform
 
     candidates = [c for c in game_candidates() if looks_like_game(c)]
-    with_exe = [c for c in candidates if (c / "Torment.exe").is_file()]
-    if with_exe:
-        return with_exe[0].resolve()
+    native = [c for c in candidates if game_platform(c) == "native"]
+    windows = [c for c in candidates if game_platform(c) == "windows"]
+    if native:
+        path = native[0]
+        nested = path / "game"
+        return (nested if looks_like_game(nested) else path).resolve(), "native"
+    if windows:
+        return windows[0].resolve(), "windows"
     if candidates:
         raise InstallError(
-            f"Found {candidates[0]} but it has no Torment.exe - this is the native\n"
-            "Linux build. Force Proton for the game in Steam properties, then re-run."
+            f"Found {candidates[0]} but it has no game executable."
         )
     raise InstallError(
         "Could not find Planescape: Torment Enhanced Edition.\n"
-        "Pass the folder that contains Torment.exe explicitly with --game-dir."
+        "Pass the folder that contains the game executable explicitly with --game-dir."
     )
 
 
@@ -303,15 +356,18 @@ def apply_ui_patch(source: bytes, patch: dict) -> bytes:
 # package handling
 # --------------------------------------------------------------------------- #
 
-def load_package(package: str | None, cache_dir: Path) -> tuple[Path, dict]:
+def load_package(package: str | None, cache_dir: Path, platform: str) -> tuple[Path, dict]:
     """Return (package_root, manifest)."""
+    native = platform == "native"
+    archive_name = _NATIVE_ARCHIVE if native else _ARCHIVE
     if package:
         path = Path(package).expanduser().resolve()
         if path.suffix.lower() == ".zip":
             return extract_zip(path, cache_dir)
         return check_package(path)
 
-    existing = [p for p in cache_dir.glob("PSTEE-Xbox-Controller-v*-preview") if p.is_dir()]
+    prefix = "PSTEE-Native-Controller-v" if native else "PSTEE-Xbox-Controller-v"
+    existing = [p for p in cache_dir.glob(prefix + "*-preview") if p.is_dir()]
     for candidate in existing:
         try:
             return check_package(candidate)
@@ -319,10 +375,10 @@ def load_package(package: str | None, cache_dir: Path) -> tuple[Path, dict]:
             continue
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    archive = cache_dir / _ARCHIVE
-    print(f"Downloading mod payload v{RELEASE_VERSION} ...")
+    archive = cache_dir / archive_name
+    print(f"Downloading mod payload v{RELEASE_VERSION} ({platform}) ...")
     errors = []
-    for url in RELEASE_URLS:
+    for url in (NATIVE_RELEASE_URLS if native else RELEASE_URLS):
         try:
             with urllib.request.urlopen(url, timeout=120) as response:
                 atomic_write(archive, response.read())
@@ -342,12 +398,15 @@ def extract_zip(archive: Path, cache_dir: Path) -> tuple[Path, dict]:
     with zipfile.ZipFile(archive) as zf:
         root_name = zf.namelist()[0].split("/")[0]
         target = cache_dir / root_name
-        if not target.is_dir():
-            for member in zf.infolist():
-                resolved = (cache_dir / member.filename).resolve()
-                if not str(resolved).startswith(str(cache_dir.resolve())):
-                    raise InstallError("Unsafe path inside package archive.")
-            zf.extractall(cache_dir)
+        if target.is_dir():
+            # A previously extracted payload must never shadow the archive
+            # handed over now: same-version packages can differ in content.
+            shutil.rmtree(target)
+        for member in zf.infolist():
+            resolved = (cache_dir / member.filename).resolve()
+            if not str(resolved).startswith(str(cache_dir.resolve())):
+                raise InstallError("Unsafe path inside package archive.")
+        zf.extractall(cache_dir)
     return check_package(target)
 
 
@@ -388,7 +447,7 @@ def patched_engine(text: str) -> str:
     return pattern.sub(f'engine_name="{PROFILE_NEW}"', text)
 
 
-def build_file_payload(game_dir: Path, package: Path) -> dict[str, bytes]:
+def build_file_payload(game_dir: Path, package: Path, platform: str) -> dict[str, bytes]:
     patch = find_patch_asset(package)
     ui_override = game_dir / "override" / "UI.menu"
     if ui_override.is_file():
@@ -402,15 +461,25 @@ def build_file_payload(game_dir: Path, package: Path) -> dict[str, bytes]:
     else:
         stock_ui = read_game_ui(game_dir)
 
-    payload = {
-        "engine.lua": patched_engine(read_engine(game_dir)).encode("utf-8"),
-        "ControllerLab.exe": (package / "payload" / "ControllerLab.exe").read_bytes(),
-        "override/M_PSTPAD.lua": (package / "payload" / "M_PSTPAD.lua").read_bytes(),
-        "override/pstcontroller.dll": (package / "payload" / "pstcontroller.dll").read_bytes(),
-        "override/UI.menu": apply_ui_patch(stock_ui, patch),
-        "override/PSTPRAD.bam": (package / "payload" / "PSTPRAD.bam").read_bytes(),
-        "override/PSTPSEL.bam": (package / "payload" / "PSTPSEL.bam").read_bytes(),
-    }
+    if platform == "native":
+        payload = {
+            "engine.lua": patched_engine(read_engine(game_dir)).encode("utf-8"),
+            "override/M_PSTPAD.lua": (package / "payload" / "M_PSTPAD.lua").read_bytes(),
+            "override/libpstcontroller.so": (package / "payload" / "libpstcontroller.so").read_bytes(),
+            "override/UI.menu": apply_ui_patch(stock_ui, patch),
+            "override/PSTPRAD.bam": (package / "payload" / "PSTPRAD.bam").read_bytes(),
+            "override/PSTPSEL.bam": (package / "payload" / "PSTPSEL.bam").read_bytes(),
+        }
+    else:
+        payload = {
+            "engine.lua": patched_engine(read_engine(game_dir)).encode("utf-8"),
+            "ControllerLab.exe": (package / "payload" / "ControllerLab.exe").read_bytes(),
+            "override/M_PSTPAD.lua": (package / "payload" / "M_PSTPAD.lua").read_bytes(),
+            "override/pstcontroller.dll": (package / "payload" / "pstcontroller.dll").read_bytes(),
+            "override/UI.menu": apply_ui_patch(stock_ui, patch),
+            "override/PSTPRAD.bam": (package / "payload" / "PSTPRAD.bam").read_bytes(),
+            "override/PSTPSEL.bam": (package / "payload" / "PSTPSEL.bam").read_bytes(),
+        }
     if sha256_bytes(payload["override/UI.menu"]).lower() != patch["targetSha256"]:
         raise InstallError("Internal error: patched UI does not match target hash.")
     return payload
@@ -427,36 +496,41 @@ def load_state(game_dir: Path) -> dict | None:
 
 
 def cmd_install(args) -> int:
-    game_dir = resolve_game(args.game_dir)
+    game_dir, platform = resolve_game(args.game_dir)
     print(f"Game folder: {game_dir}")
+    print(f"Build:       {'native Linux' if platform == 'native' else 'Windows (Proton)'}")
 
-    exe_hash = sha256_path(game_dir / "Torment.exe")
-    if exe_hash != SUPPORTED_EXE_SHA256:
+    binary = game_dir / ("Torment.exe" if platform == "windows" else LINUX_BINARY)
+    expected = SUPPORTED_EXE_SHA256 if platform == "windows" else SUPPORTED_NATIVE_SHA256
+    exe_hash = sha256_path(binary)
+    if exe_hash != expected:
         if not args.allow_unknown_exe:
+            label = "Torment.exe (Windows 3.2.2.0)" if platform == "windows" else "Torment (Linux)"
             raise InstallError(
-                "Torment.exe fingerprint is not the verified Windows 3.2.2.0 build.\n"
+                f"{binary.name} fingerprint is not the verified {label} build.\n"
                 f"  found:    {exe_hash}\n"
-                f"  expected: {SUPPORTED_EXE_HASH_DISPLAY}\n"
-                "The mod's native DLL uses build-specific offsets. Re-run with\n"
+                f"  expected: {expected}\n"
+                "The mod's native bridge uses build-specific offsets. Re-run with\n"
                 "--allow-unknown-exe only if you accept that movement/camera may misbehave."
             )
-        print("WARNING: unrecognised Torment.exe - the native bridge may misbehave.")
+        print(f"WARNING: unrecognised {binary.name} - the native bridge may misbehave.")
 
-    package, manifest = load_package(args.package, Path(args.cache_dir).expanduser())
+    package, manifest = load_package(args.package, Path(args.cache_dir).expanduser(), platform)
     print(f"Package:     {package.name} (v{manifest.get('version')})")
 
     state = load_state(game_dir)
     if state and state.get("status") == "installed":
         raise InstallError("The mod is already installed. Run 'uninstall' first.")
 
-    payload = build_file_payload(game_dir, package)
+    payload = build_file_payload(game_dir, package, platform)
+    files = mod_files(platform)
 
     backup_id = os.urandom(8).hex()
     backup_root = game_dir / STATE_DIR / "backups" / backup_id
     entries = []
     # Stage everything before touching the game.
     staged: list[tuple[Path, Path]] = []
-    for index, relative in enumerate(MOD_FILES):
+    for index, relative in enumerate(files):
         target = game_dir / relative
         data = payload[relative]
         backup_name = f"{index:02d}.bin"
@@ -485,6 +559,8 @@ def cmd_install(args) -> int:
         "version": manifest.get("version", RELEASE_VERSION),
         "status": "installing",
         "backupSet": backup_id,
+        "platform": platform,
+        "binary": binary.name,
         "tormentExe": exe_hash,
         "files": entries,
     }
@@ -504,10 +580,12 @@ def cmd_install(args) -> int:
         raise
 
     print(f"Installed controller mod v{state['version']}.")
+    if platform == "native":
+        print(f"Bridge link:  {link_bridge(game_dir)}")
     if args.import_saves:
-        import_saves(game_dir)
+        import_saves(game_dir, platform)
     print()
-    print_launch_help(game_dir)
+    print_launch_help(game_dir, platform)
     return 0
 
 
@@ -517,9 +595,11 @@ def cmd_uninstall_files(game_dir: Path, state: dict, check_installed: bool = Tru
     Validation and mutation must be separate passes: a conflict on the last
     file must not leave the game half-uninstalled.
     """
+    platform = state.get("platform") or game_platform(game_dir) or "windows"
+    files = mod_files(platform)
     for entry in state["files"]:
         relative = entry["path"]
-        if relative not in MOD_FILES:
+        if relative not in files:
             raise InstallError("Invalid backup manifest.")
         if check_installed:
             target = game_dir / relative
@@ -543,13 +623,16 @@ def cmd_uninstall_files(game_dir: Path, state: dict, check_installed: bool = Tru
 
 
 def cmd_uninstall(args) -> int:
-    game_dir = resolve_game(args.game_dir)
+    game_dir, _platform = resolve_game(args.game_dir)
     state = load_state(game_dir)
     if not state:
         raise InstallError("No install state found; nothing to uninstall.")
     cmd_uninstall_files(game_dir, state)
     state["status"] = "uninstalled"
     atomic_write(game_dir / STATE_DIR / "state.json", json.dumps(state, indent=2).encode())
+    if state.get("platform") == "native":
+        unlink_bridge()
+        print("Removed the LD_PRELOAD bridge link; clear the Launch Options field in Steam.")
     print(f"Uninstalled. Original files restored in {game_dir}")
     print("Backups are kept in " + str(game_dir / STATE_DIR / "backups" / state["backupSet"]))
     return 0
@@ -574,21 +657,36 @@ def documents_dirs(pfx: Path | None) -> list[Path]:
     return found
 
 
-def import_saves(game_dir: Path) -> None:
-    pfx = compat_prefix(game_dir)
-    if not pfx:
-        print("Save import skipped: no Proton prefix found for app 466300.")
-        return
-    source = target = None
-    for docs in documents_dirs(pfx):
-        candidate = docs / PROFILE_OLD / "save"
-        if candidate.is_dir():
-            source = candidate
-            target = docs / PROFILE_NEW / "save"
-            break
-    if not source or target is None:
-        print(f"Save import skipped: no '{PROFILE_OLD}' save folder in the Proton prefix.")
-        return
+def native_profile_dirs(home: Path | None = None) -> tuple[Path, Path]:
+    """The native build keeps profiles under ~/.local/share."""
+    share = (home or Path.home()) / ".local" / "share"
+    return share / PROFILE_OLD, share / PROFILE_NEW
+
+
+def import_saves(game_dir: Path, platform: str | None = None, home: Path | None = None) -> None:
+    platform = platform or game_platform(game_dir) or "windows"
+    if platform == "native":
+        old_dir, new_dir = native_profile_dirs(home)
+        source = old_dir / "save"
+        if not source.is_dir():
+            print(f"Save import skipped: no '{PROFILE_OLD}/save' in {old_dir}.")
+            return
+        target = new_dir / "save"
+    else:
+        pfx = compat_prefix(game_dir)
+        if not pfx:
+            print("Save import skipped: no Proton prefix found for app 466300.")
+            return
+        source = target = None
+        for docs in documents_dirs(pfx):
+            candidate = docs / PROFILE_OLD / "save"
+            if candidate.is_dir():
+                source = candidate
+                target = docs / PROFILE_NEW / "save"
+                break
+        if not source or target is None:
+            print(f"Save import skipped: no '{PROFILE_OLD}' save folder in the Proton prefix.")
+            return
 
     target.mkdir(parents=True, exist_ok=True)
     used = {entry.name for entry in target.iterdir()}
@@ -643,6 +741,35 @@ def import_saves(game_dir: Path) -> None:
 SUPPORTED_EXE_HASH_DISPLAY = SUPPORTED_EXE_SHA256
 
 
+def bridge_symlink() -> Path:
+    """Space-free path for LD_PRELOAD.
+
+    ld.so splits LD_PRELOAD on spaces, and Steam game folders contain spaces,
+    so the bridge is reached through a symlink under ~/.cache.
+    """
+    return Path.home() / ".cache" / "pstee-controller-deck" / "bridge.so"
+
+
+def native_launch_option() -> str:
+    return f'LD_PRELOAD="{bridge_symlink()}" %command%'
+
+
+def link_bridge(game_dir: Path) -> Path:
+    target = bridge_symlink()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source = game_dir / "override" / "libpstcontroller.so"
+    if target.exists() or target.is_symlink():
+        target.unlink()
+    target.symlink_to(source)
+    return target
+
+
+def unlink_bridge() -> None:
+    target = bridge_symlink()
+    if target.is_symlink() or target.exists():
+        target.unlink()
+
+
 def launch_option(game_dir: Path) -> str:
     """Swap the game executable for the mod launcher inside Steam's command.
 
@@ -654,7 +781,27 @@ def launch_option(game_dir: Path) -> str:
     return """echo "%command%" | sed 's|Torment[.]exe|ControllerLab.exe|' | sh"""
 
 
-def print_launch_help(game_dir: Path) -> None:
+def print_launch_help(game_dir: Path, platform: str) -> None:
+    if platform == "native":
+        print("Steam Deck / Linux launch setup (native build)")
+        print("-" * 60)
+        print("No Proton and no compatibility-tool change is needed. One launch")
+        print("option loads the bridge before the game starts:")
+        print()
+        print("   " + native_launch_option())
+        print()
+        print("Properties > Launch Options - paste exactly the line above.")
+        print("The path is a space-free symlink this installer maintains, because")
+        print("ld.so splits LD_PRELOAD on spaces and the game folder has spaces.")
+        print()
+        print("Keep Steam Input enabled with a pad-only template (gamepad buttons,")
+        print("no keyboard/mouse bindings). The bridge reads the pad through the")
+        print("game's own SDL; disabling Steam Input can hide the Deck's pad.")
+        print()
+        print("Start the game, then press and release A once to arm controller mode.")
+        print()
+        print(f"Saves live in ~/.local/share/{PROFILE_NEW}/")
+        return
     print("Steam Deck / Linux launch setup")
     print("-" * 60)
     print("1. Steam > Planescape: Torment: Enhanced Edition > Properties >")
@@ -671,11 +818,12 @@ def print_launch_help(game_dir: Path) -> None:
 
 
 def cmd_status(args) -> int:
-    game_dir = resolve_game(args.game_dir)
+    game_dir, platform = resolve_game(args.game_dir)
     state = load_state(game_dir)
     print(f"Game folder: {game_dir}")
-    exe = game_dir / "Torment.exe"
-    print(f"Torment.exe: {sha256_path(exe) if exe.is_file() else 'MISSING'}")
+    print(f"Build:       {'native Linux' if platform == 'native' else 'Windows (Proton)'}")
+    binary = game_dir / ("Torment.exe" if platform == "windows" else LINUX_BINARY)
+    print(f"{binary.name}: {sha256_path(binary) if binary.is_file() else 'MISSING'}")
     if not state:
         print("Mod:         not installed")
         return 0
@@ -694,16 +842,23 @@ def cmd_detect(args) -> int:
         print("Searched:", ", ".join(str(r) for r in steam_roots()) or "(no Steam roots)")
         return 1
     for candidate in candidates:
-        exe = candidate / "Torment.exe"
+        platform = game_platform(candidate) if looks_like_game(candidate) else None
+        binary = {"windows": "Torment.exe", "native": LINUX_BINARY}.get(platform or "")
         state = load_state(candidate) if looks_like_game(candidate) else None
         print(f"{candidate}")
-        print(f"  Torment.exe: {'yes ' + sha256_path(exe)[:16] if exe.is_file() else 'no (native Linux build - force Proton)'}")
+        if binary:
+            print(f"  {binary}: {'yes ' + sha256_path(candidate / binary)[:16] if (candidate / binary).is_file() else 'yes'}")
+        else:
+            print("  executable: none found")
         print(f"  mod:         {state['status'] if state else 'not installed'}")
     return 0
 
 
 def cmd_launch_option(args) -> int:
-    game_dir = resolve_game(args.game_dir)
+    game_dir, platform = resolve_game(args.game_dir)
+    if platform == "native":
+        print(native_launch_option())
+        return 0
     print(launch_option(game_dir))
     return 0
 

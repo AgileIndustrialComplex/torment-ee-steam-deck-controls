@@ -1,4 +1,4 @@
-# Controller implementation - 0.1.31
+# Controller implementation - 0.2.0
 
 ## Supported target and isolation
 
@@ -56,6 +56,61 @@ Camera follow is an actor ID at world +0xa58, not a boolean selected-ID toggle.
 Operation 19 records/relinquishes the mod-owned lock or explicitly releases it
 for RS/PC edge panning. User follow away from a PC screen edge is preserved.
 Operation 18 uses the stock world view command; RT+RS uses zoom input.
+
+## Linux implementation - 0.2.0
+
+The Linux Torment binary (Steam build 25492483, same 3.2.2.0 content as the
+Windows target; the stock UI.menu is byte-identical) ships unstripped, so
+every address the bridge needs resolves by symbol name:
+inspect_linux.py emits native/linux_offsets.h from the game ELF and verifies
+anchor sizes before writing it. CInfGame/CGameArea/CGameSprite member
+offsets are identical across both builds; five CBaldurChitin slots shift by
+0x50 (documented in engine_layout.h, fixed by disassembly of
+CScreenWorld::StartScroll, CBaldurProjector::TimerSynchronousUpdate and
+CChitin::SelectEngine).
+
+The Lua environment sandbox has neither `package` nor `io`, and engine.lua
+is config-parsed rather than executed, so the Windows loadlib fallback and
+any engine.lua loader are dead ends (verified live in a container with
+strace). The bridge therefore loads through one `LD_PRELOAD` launch option
+- ld.so splits LD_PRELOAD on spaces and the game folder contains spaces, so
+the installer maintains a space-free symlink at
+~/.cache/pstee-controller-deck/bridge.so. The constructor verifies the
+executable SHA-256, the Controller Lab profile and four patch sites before
+hooking anything, and writes controller-loader.log with the outcome.
+
+Four guarded hooks, each restored through trampolines built from the
+recorded prologue bytes: bootstrapLua (rebuilds its `call luaL_newstate`
+and its `lea` as immediates, then registers PSTPadNative on the fresh Lua
+state exactly like the Windows startup hook), CChitin::ProcessEvents (movie
+A-button skip plus drop_marked_keys, which drains and re-queues the SDL
+event queue with the physical-input watch muted so replayed clicks are not
+double-counted), CVidMode::SetPointer (cursor suppression while the mod
+hides the cursor; the restore path re-issues the last suppressed request),
+and uiDoFile (logs every executed Lua chunk, and runs a one-shot survey
+that calls PSTPadNative(0,0,0,0) when M_PSTPAD is about to load - a live
+end-to-end check that lands in controller-loader.log).
+
+Safe reads go through /proc/self/mem pread (the no-fault equivalent of
+ReadProcessMemory on self); writable-page checks parse /proc/self/maps with
+a 250 ms cache. The pad is read through the game's own statically linked
+SDL_GameController API (Steam Input exposes the Deck pad as a controller),
+mapped into the XInput state layout the Lua layer expects, with SDL's
+downward Y inverted. The compact SHA-256 is the standard public-domain
+implementation; the bridge depends on libc only (GLIBC_2.17 baseline).
+
+Not ported yet: the steering wait/face gates and the destination-marker
+draw gate. Movement still routes through the stock group order path
+(CAIGroup::GroupSetTarget, verified against the engine's own call sites:
+RemoveTraps stores the point at sprite+0x460, calls
+CGameSprite::MoveToPoint(const CPoint&) and compares the uint16 return
+against ACTION_DONE). Followers may briefly play idle or turn-around
+animations during stick-driven regrouping.
+
+Verified against the real game in a container: preload, fingerprint, all
+four patches, registration, M_PSTPAD execution and a live dispatch call
+(the survey line) all succeed and the game runs its UI with the mod active.
+Physical pad behaviour on Deck hardware remains untested.
 
 ## Validation and packaging
 

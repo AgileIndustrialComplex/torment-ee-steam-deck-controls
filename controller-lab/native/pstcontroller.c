@@ -13,6 +13,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "engine_layout.h"
 
 typedef struct lua_State lua_State;
 typedef int (*LuaFunction)(lua_State *);
@@ -122,16 +123,37 @@ static uintptr_t read_pointer(uintptr_t address) {
     read_memory(address, &out, sizeof(out));
     return out;
 }
+/* Platform helpers shared with the Linux bridge through nearby_targets.h.
+ * The image bounds replicate the checks the Windows build derives from the
+ * PE headers; the container getter mirrors Infinity_ClickObjectInWorld. */
+static int image_contains(uintptr_t address) {
+    IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(engine + ((IMAGE_DOS_HEADER *)engine)->e_lfanew);
+    return address >= (uintptr_t)engine + 0x1000 && address < (uintptr_t)engine + nt->OptionalHeader.SizeOfImage;
+}
+static int container_bounds(uintptr_t object, int32_t bounds[4]) {
+    uintptr_t method = read_pointer(read_pointer(object) + E_SLOT_BOUNDS);
+    if (!image_contains(method)) return 0;
+    void *result = ((void *(*)(void *, void *))method)((void *)object, bounds);
+    return result == bounds;
+}
+static int point_is_writable(uintptr_t address) {
+    MEMORY_BASIC_INFORMATION info;
+    if (!address || (address&7) || VirtualQuery((void *)address,&info,sizeof(info))!=sizeof(info)
+        || info.State!=MEM_COMMIT || (info.Protect&(PAGE_GUARD|PAGE_NOACCESS))
+        || (info.Protect!=PAGE_READWRITE && info.Protect!=PAGE_WRITECOPY)) return 0;
+    return address>=(uintptr_t)info.BaseAddress
+        && address+8<=(uintptr_t)info.BaseAddress+info.RegionSize;
+}
 static void log_runtime(int operation,int a,int b,int c) {
     if (runtime_log==INVALID_HANDLE_VALUE || runtime_log_lines++>=5000) return;
-    uintptr_t chitin=read_pointer((uintptr_t)engine+0x72c278),game=read_pointer(chitin+0x10c8);
+    uintptr_t chitin=read_pointer((uintptr_t)engine+E_CHITIN_PTR),game=read_pointer(chitin+CHITIN_GAME);
     uint16_t state=0; uint8_t icon=0; int32_t count=0,run=0;
     read_memory(game+0x78b0,&state,2); read_memory(game+0x78b8,&icon,1);
     read_memory(game+0xa2b0,&count,4); read_memory(game+0xb9c0,&run,4);
     uint32_t id=UINT32_MAX; int32_t point[2]={0}; uint16_t action=0,action_ticks=0;
     uintptr_t head=read_pointer(game+0xa2a0);
     if (head && read_memory(head+0x10,&id,4)) {
-        uintptr_t actor=read_pointer((uintptr_t)engine+0x72d868+((id>>16)&0x7fff)*16);
+        uintptr_t actor=read_pointer((uintptr_t)engine+E_OBJECT_ROWS+8+((id>>16)&0x7fff)*16);
         read_memory(actor+0xc,point,8); read_memory(actor+0x3f0,&action,2);
         read_memory(actor+0x3ec,&action_ticks,2);
     }
@@ -141,21 +163,20 @@ static void log_runtime(int operation,int a,int b,int c) {
 }
 static void log_party_members(void) {
     if (runtime_log==INVALID_HANDLE_VALUE) return;
-    uintptr_t chitin=read_pointer((uintptr_t)engine+0x72c278),game=read_pointer(chitin+0x10c8);
+    uintptr_t chitin=read_pointer((uintptr_t)engine+E_CHITIN_PTR),game=read_pointer(chitin+CHITIN_GAME);
     int32_t count=0; if (!read_memory(game+0xa2b0,&count,4) || count<1 || count>6) return;
     uintptr_t node=read_pointer(game+0xa2a0);
-    IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(engine+((IMAGE_DOS_HEADER *)engine)->e_lfanew);
     for (int n=0;n<count && node && runtime_log_lines<5000;++n) {
         uint32_t id=UINT32_MAX; uint16_t generation=0,action=0; int32_t point[2]={0}; uint8_t type=0,flags=0,speed=0;
         if (!read_memory(node+0x10,&id,4)) break;
         node=read_pointer(node);
-        uintptr_t row=(uintptr_t)engine+0x72d860+((id>>16)&0x7fff)*16,actor=read_pointer(row+8);
+        uintptr_t row=(uintptr_t)engine+E_OBJECT_ROWS+((id>>16)&0x7fff)*16,actor=read_pointer(row+8);
         if (!read_memory(row,&generation,2) || generation!=(uint16_t)id || !read_memory(actor+8,&type,1) || type!=0x31) continue;
         read_memory(actor+0xc,point,8); read_memory(actor+0x3f0,&action,2); read_memory(actor+0x3958,&flags,1);
         if (flags&4) read_memory(actor+0x3960,&speed,1);
         else {
             uintptr_t animation=read_pointer(actor+0x3950),method=read_pointer(read_pointer(animation)+0xc0);
-            if (method>=(uintptr_t)engine+0x1000 && method<(uintptr_t)engine+nt->OptionalHeader.SizeOfImage)
+            if (image_contains(method))
                 speed=((uint8_t (*)(void *))method)((void *)animation);
         }
         char line[180]; int length=snprintf(line,sizeof(line),"%u member=%d id=%u xy=%d,%d moveScale=%u action=%u\r\n",get_ticks(),n,id,point[0],point[1],speed,action);
@@ -204,10 +225,10 @@ done:
  * No writes to actors, action queues, or game memory occur here.
  */
 static int player_screen_position(double *sx, double *sy) {
-    uintptr_t chitin = read_pointer((uintptr_t)engine + 0x72c278);
-    uintptr_t game = read_pointer(chitin + 0x10c8);
-    uintptr_t video = read_pointer(chitin + 0x268);
-    uintptr_t world = read_pointer(chitin + 0x260);
+    uintptr_t chitin = read_pointer((uintptr_t)engine + E_CHITIN_PTR);
+    uintptr_t game = read_pointer(chitin + CHITIN_GAME);
+    uintptr_t video = read_pointer(chitin + CHITIN_VIDEO);
+    uintptr_t world = read_pointer(chitin + CHITIN_ACTIVE_ENGINE);
     if (!game || !video || !world) return 0;
     uint8_t area_index = 0;
     int16_t party_count = 0;
@@ -217,10 +238,8 @@ static int player_screen_position(double *sx, double *sy) {
     if (!area) return 0;
     int selected = 0;
     uintptr_t vtable = read_pointer(world);
-    uintptr_t getter = read_pointer(vtable + 0x1c0);
-    IMAGE_DOS_HEADER *dos = (IMAGE_DOS_HEADER *)engine;
-    IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(engine + dos->e_lfanew);
-    if (getter >= (uintptr_t)engine + 0x1000 && getter < (uintptr_t)engine + nt->OptionalHeader.SizeOfImage) {
+    uintptr_t getter = read_pointer(vtable + E_SLOT_SELECTED);
+    if (image_contains(getter)) {
         selected = ((int16_t (*)(void *))getter)((void *)world);
     }
     if (selected < 0 || selected >= party_count) selected = 0;
@@ -340,8 +359,8 @@ static void set_drive_cursor_hidden(int hide) {
     if (hide) {
         show_cursor(0);
         if (original_set_video_pointer) {
-            uintptr_t chitin = read_pointer((uintptr_t)engine + 0x72c278);
-            void *video = (void *)read_pointer(chitin + 0x268);
+            uintptr_t chitin = read_pointer((uintptr_t)engine + E_CHITIN_PTR);
+            void *video = (void *)read_pointer(chitin + CHITIN_VIDEO);
             if (video) {
                 if (!desired_video) {
                     desired_video = video;
@@ -354,8 +373,8 @@ static void set_drive_cursor_hidden(int hide) {
     }
     else if (cursor_hidden_by_mod) {
         cursor_hidden_by_mod = 0;
-        uintptr_t chitin = read_pointer((uintptr_t)engine + 0x72c278);
-        void *video = (void *)read_pointer(chitin + 0x268);
+        uintptr_t chitin = read_pointer((uintptr_t)engine + E_CHITIN_PTR);
+        void *video = (void *)read_pointer(chitin + CHITIN_VIDEO);
         if (original_set_video_pointer && video && desired_video == video)
             original_set_video_pointer(video, desired_pointer, desired_pointer_flags, desired_pointer_mode);
         desired_video = desired_pointer = NULL;
@@ -381,9 +400,9 @@ static void keyboard_event(void *window, int key, int down) {
 static int movie_playing(void) {
     /* Same active-engine/player checks as this build's Infinity_GetCurrentMovie.
      * This excludes the looping flame widget and the Movies selection screen. */
-    uintptr_t chitin=read_pointer((uintptr_t)engine+0x72c278);
-    uintptr_t movie=read_pointer(chitin+0x10d8);
-    return movie && read_pointer(chitin+0x260)==movie && read_pointer(movie+0x58)!=0;
+    uintptr_t chitin=read_pointer((uintptr_t)engine+E_CHITIN_PTR);
+    uintptr_t movie=read_pointer(chitin+CHITIN_MOVIE_PROJECTOR);
+    return movie && read_pointer(chitin+CHITIN_ACTIVE_ENGINE)==movie && read_pointer(movie+0x58)!=0;
 }
 static int movie_skip_edge(int connected,int focused,int playing,unsigned buttons) {
     unsigned a=connected ? buttons&XINPUT_GAMEPAD_A : 0;
@@ -423,8 +442,8 @@ static uintptr_t follow_owner_world;
 static int32_t follow_owner_id=-1;
 static int follow_owned;
 static int controller_camera_follow(int mode,int focused) {
-    uintptr_t chitin=read_pointer((uintptr_t)engine+0x72c278);
-    uintptr_t world=read_pointer(chitin+0x1148);
+    uintptr_t chitin=read_pointer((uintptr_t)engine+E_CHITIN_PTR);
+    uintptr_t world=read_pointer(chitin+CHITIN_WORLD_SCREEN);
     int32_t current=-1; int result=0;
     if (!world || !read_memory(world+0xa58,&current,4) || !point_is_writable(world+0xa58)) return 0;
     if (mode==0) {
@@ -432,14 +451,14 @@ static int controller_camera_follow(int mode,int focused) {
             int32_t unlocked=-1; memcpy((void *)(world+0xa58),&unlocked,4); result=1;
         }
         follow_owned=0;
-    } else if (focused && read_pointer(chitin+0x260)==world && mode==1 && current==-1) {
+    } else if (focused && read_pointer(chitin+CHITIN_ACTIVE_ENGINE)==world && mode==1 && current==-1) {
         uintptr_t game,area,video; uint32_t leader=UINT32_MAX; int32_t origin[2];
         if (interaction_context(&game,&area,&video) && selected_origin(game,area,&leader,origin)) {
             int32_t lock=(int32_t)leader;
             memcpy((void *)(world+0xa58),&lock,4);
             follow_owner_world=world; follow_owner_id=lock; follow_owned=1; result=1;
         }
-    } else if (focused && read_pointer(chitin+0x260)==world && mode==2) {
+    } else if (focused && read_pointer(chitin+CHITIN_ACTIVE_ENGINE)==world && mode==2) {
         /* Explicit manual camera input takes priority over any follow lock,
          * including one left behind by an earlier plugin/selection change. */
         int32_t unlocked=-1; memcpy((void *)(world+0xa58),&unlocked,4);
@@ -452,15 +471,15 @@ static int controller_camera_follow(int mode,int focused) {
 static int pan_world_camera(int dx,int dy,int width,int height,int focused) {
     if (!focused || !set_world_view || width<=0 || height<=0
         || dx < -128 || dx > 128 || dy < -128 || dy > 128 || (!dx && !dy)) return 0;
-    uintptr_t chitin=read_pointer((uintptr_t)engine+0x72c278);
-    uintptr_t world=read_pointer(chitin+0x1148);
+    uintptr_t chitin=read_pointer((uintptr_t)engine+E_CHITIN_PTR);
+    uintptr_t world=read_pointer(chitin+CHITIN_WORLD_SCREEN);
     uintptr_t game,area,video;
-    if (!world || read_pointer(chitin+0x260)!=world || !interaction_context(&game,&area,&video)) return 0;
+    if (!world || read_pointer(chitin+CHITIN_ACTIVE_ENGINE)!=world || !interaction_context(&game,&area,&video)) return 0;
     int32_t current[2],dimensions[2]; uint16_t rw=0,rh=0; float zoom=0;
     if (!read_memory(area+0x698,current,8) || !read_memory(video+0x150,dimensions,8)
         || !read_memory(area+0xa14,&zoom,4)
-        || !read_memory((uintptr_t)engine+0x72120c,&rw,2)
-        || !read_memory((uintptr_t)engine+0x721210,&rh,2)
+        || !read_memory((uintptr_t)engine+E_REF_WIDTH,&rw,2)
+        || !read_memory((uintptr_t)engine+E_REF_HEIGHT,&rh,2)
         || dimensions[0]<=0 || dimensions[1]<=0 || !rw || !rh
         || !isfinite(zoom) || zoom<0.125f || zoom>8.0f
         || current[0]<-32768 || current[0]>32767 || current[1]<-32768 || current[1]>32767) return 0;
@@ -538,8 +557,8 @@ static int dispatch(lua_State *state) {
     double px = 0, py = 0;
     int position_valid = focused && player_screen_position(&px, &py);
     int32_t selected_count = 0;
-    uintptr_t chitin = read_pointer((uintptr_t)engine + 0x72c278);
-    uintptr_t game = read_pointer(chitin + 0x10c8);
+    uintptr_t chitin = read_pointer((uintptr_t)engine + E_CHITIN_PTR);
+    uintptr_t game = read_pointer(chitin + CHITIN_GAME);
     if (!read_memory(game + 0xa2b0, &selected_count, 4) || selected_count < 0 || selected_count > 6) selected_count = 0;
     double values[20] = {
         connected, pad.Gamepad.wButtons, pad.Gamepad.sThumbLX, pad.Gamepad.sThumbLY,

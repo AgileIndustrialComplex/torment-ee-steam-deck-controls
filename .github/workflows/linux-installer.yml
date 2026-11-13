@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'distribution/linux/**'
+      - 'controller-lab/**'
       - '.github/workflows/linux-installer.yml'
   pull_request:
     paths:
       - 'distribution/linux/**'
+      - 'controller-lab/**'
       - '.github/workflows/linux-installer.yml'
   workflow_dispatch:
 
@@ -37,8 +39,31 @@ jobs:
           bash -n install-deck.sh
           bash -n uninstall-deck.sh
 
+      - name: Build native bridge and run model tests
+        working-directory: controller-lab
+        run: python3 build_plugin_linux.py --check
+
+      - name: Bridge symbol baseline
+        # The game runs on SteamOS (glibc 2.35); keep the required baseline at
+        # or below it so the shared object loads wherever the game does.
+        working-directory: controller-lab/native
+        run: |
+          versions=$(objdump -T libpstcontroller.so | grep -oE 'GLIBC_[0-9.]+' | sort -u)
+          echo "$versions"
+          bad=$(echo "$versions" | awk -F. '$2 > 17 {print}' | head -1)
+          if [ -n "$bad" ]; then
+            echo "FAIL: $bad exceeds the GLIBC_2.17 baseline"
+            exit 1
+          fi
+          exports=$(nm -D --defined-only libpstcontroller.so | grep -c ' T ')
+          if [ "$exports" != "1" ]; then
+            echo "FAIL: expected exactly one exported symbol, found $exports"
+            exit 1
+          fi
+
       - name: Fetch preview payload
-        # The tests need the real binaries; they are not committed.
+        # The Proton-path tests need the real Windows binaries; they are not
+        # committed. The native payload is built in this job.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -46,9 +71,28 @@ jobs:
           version=$(grep -oP 'RELEASE_VERSION = "\K[^"]+' distribution/linux/install.py)
           echo "payload version: $version"
           url="https://github.com/NiksonLichev/planescape-torment-enhanced-edition-xbox-controller-mod/releases/download/v$version/PSTEE-Xbox-Controller-v$version-preview.zip"
-          curl -fsSL "$url" -o "$RUNNER_TEMP/preview.zip"
-          echo "PSTEE_PREVIEW_ZIP=$RUNNER_TEMP/preview.zip" >> "$GITHUB_ENV"
+          if curl -fsSL --max-time 60 "$url" -o "$RUNNER_TEMP/preview.zip"; then
+            echo "PSTEE_PREVIEW_ZIP=$RUNNER_TEMP/preview.zip" >> "$GITHUB_ENV"
+          elif [ -f "dist/PSTEE-Xbox-Controller-v$version-preview.zip" ]; then
+            echo "PSTEE_PREVIEW_ZIP=$PWD/dist/PSTEE-Xbox-Controller-v$version-preview.zip" >> "$GITHUB_ENV"
+          else
+            echo "no Windows payload available; the Windows-path package tests cannot run" >&2
+          fi
 
       - name: Installer tests
         working-directory: distribution/linux
-        run: python test_install.py
+        env:
+          PSTEE_NATIVE_PAYLOAD_DIR: ${{ github.workspace }}/controller-lab/native-payload
+        run: |
+          mkdir -p "$PSTEE_NATIVE_PAYLOAD_DIR"
+          cp ../controller-lab/M_PSTPAD.lua "$PSTEE_NATIVE_PAYLOAD_DIR/"
+          cp ../controller-lab/native/libpstcontroller.so "$PSTEE_NATIVE_PAYLOAD_DIR/"
+          python3 - <<'EOF'
+          import sys
+          sys.path.insert(0, "../controller-lab")
+          from radial_asset import build_ui_assets
+          for name, data in build_ui_assets().items():
+              with open(f"../controller-lab/native-payload/{name}", "wb") as fh:
+                  fh.write(data)
+          EOF
+          python test_install.py

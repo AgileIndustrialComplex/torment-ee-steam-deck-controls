@@ -2,7 +2,15 @@
  * read-only helpers. No external process probe, memory writes, or screenshots.
  * Object types follow CGameObject; x64 base fields and row bounds were checked
  * against this executable's object lookup and rendering code.
+ *
+ * The including translation unit must define, before including this header:
+ *   int  image_contains(uintptr_t address);          - address lies in the engine image
+ *   int  container_bounds(uintptr_t object, int32_t bounds[4]); - CGameContainer rect getter
+ *   int  point_is_writable(uintptr_t address);       - committed private RW page check
+ * and provide read_memory/read_pointer/get_ticks/push_number/log_runtime/
+ * synchronize_pointer/mouse_click/mouse_state/controller_steering_active/engine.
  */
+#include "engine_layout.h"
 typedef struct { uint32_t id; uintptr_t object; int kind; int32_t x, y; double distance; int rank; } NearbyTarget;
 static NearbyTarget nearby_targets[128];
 static int nearby_count;
@@ -19,7 +27,7 @@ static int point_to_screen(uintptr_t area, uintptr_t video, int32_t x, int32_t y
     uint16_t rw=0,rh=0; float zoom=0;
     if (!read_memory(area+0x650,view,8) || !read_memory(area+0x698,scroll,8)
         || !read_memory(video+0x150,dimensions,8) || !read_memory(video+0x188,offsets,8)
-        || !read_memory((uintptr_t)engine+0x72120c,&rw,2) || !read_memory((uintptr_t)engine+0x721210,&rh,2)
+        || !read_memory((uintptr_t)engine+E_REF_WIDTH,&rw,2) || !read_memory((uintptr_t)engine+E_REF_HEIGHT,&rh,2)
         || !read_memory(area+0xa14,&zoom,4) || !rw || !rh || !isfinite(zoom) || zoom<0.125 || zoom>8) return 0;
     *sx=(((double)(x-scroll[0]+view[0])*dimensions[0]/rw)-offsets[1])/zoom;
     *sy=(((double)(y-scroll[1]+view[1])*dimensions[1]/rh)-offsets[0])/zoom;
@@ -28,7 +36,7 @@ static int point_to_screen(uintptr_t area, uintptr_t video, int32_t x, int32_t y
 
 static uintptr_t object_for_id(uint32_t id) {
     uint16_t generation=0;
-    uintptr_t row=(uintptr_t)engine+0x72d860+((id>>16)&0x7fff)*16;
+    uintptr_t row=(uintptr_t)engine+E_OBJECT_ROWS+((id>>16)&0x7fff)*16;
     if (!read_memory(row,&generation,2) || generation!=(uint16_t)id) return 0;
     return read_pointer(row+8);
 }
@@ -52,12 +60,8 @@ static int target_point(uintptr_t object, uintptr_t area, int *kind, int32_t *x,
         /* Mirrors Infinity_ClickObjectInWorld's CONTAINER rectangle getter.
          * The compared build constant at RVA 0x62c89a is 0x11.
          */
-        uintptr_t method=read_pointer(read_pointer(object)+0x180);
-        IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(engine+((IMAGE_DOS_HEADER *)engine)->e_lfanew);
-        if (method<(uintptr_t)engine+0x1000 || method>=(uintptr_t)engine+nt->OptionalHeader.SizeOfImage) return 0;
         int32_t bounds[4]={0};
-        void *result=((void *(*)(void *, void *))method)((void *)object,bounds);
-        if (result!=bounds || bounds[2]<=bounds[0] || bounds[3]<=bounds[1]) return 0;
+        if (!container_bounds(object,bounds) || bounds[2]<=bounds[0] || bounds[3]<=bounds[1]) return 0;
         point[0]=bounds[0]+(bounds[2]-bounds[0])/2;
         point[1]=bounds[1]+(bounds[3]-bounds[1])/2;
         uint16_t container_type=0; int32_t item_count=0;
@@ -83,8 +87,8 @@ static int target_point(uintptr_t object, uintptr_t area, int *kind, int32_t *x,
 }
 
 static int interaction_context(uintptr_t *game, uintptr_t *area, uintptr_t *video) {
-    uintptr_t chitin=read_pointer((uintptr_t)engine+0x72c278);
-    *game=read_pointer(chitin+0x10c8); *video=read_pointer(chitin+0x268);
+    uintptr_t chitin=read_pointer((uintptr_t)engine+E_CHITIN_PTR);
+    *game=read_pointer(chitin+CHITIN_GAME); *video=read_pointer(chitin+CHITIN_VIDEO);
     uint8_t index=255;
     if (!*game || !*video || !read_memory(*game+0xa178,&index,1) || index>11) return 0;
     *area=read_pointer(*game+0xa180+(uintptr_t)index*8);
@@ -108,8 +112,8 @@ static void refresh_nearby_targets(uintptr_t game, uintptr_t area, int mode) {
     if (!leader || read_pointer(leader+0x18)!=area || !read_memory(leader+0xc,origin,8)) return;
     uintptr_t sprite_vtable=read_pointer(leader);
     int16_t highest=-1;
-    if (!read_memory((uintptr_t)engine+0x72d854,&highest,2) || highest<0) return;
-    if (!read_memory((uintptr_t)engine+0x72d860,nearby_rows,((size_t)highest+1)*16)) return;
+    if (!read_memory((uintptr_t)engine+E_OBJECT_MAX,&highest,2) || highest<0) return;
+    if (!read_memory((uintptr_t)engine+E_OBJECT_ROWS,nearby_rows,((size_t)highest+1)*16)) return;
     for (int slot=0; slot<=highest && nearby_count<128; ++slot) {
         const unsigned char *row=nearby_rows+slot*16;
         uint16_t generation; uintptr_t object;
@@ -172,9 +176,8 @@ static int dispatch_nearby(lua_State *state, int operation, uint32_t argument, i
                  * the captured object directly, without the mouse ID pair
                  * (area+0x240/0x244) required by the mouse-up handler.
                  */
-                uintptr_t method=read_pointer(read_pointer(target->object)+0x78);
-                IMAGE_NT_HEADERS64 *nt=(IMAGE_NT_HEADERS64 *)(engine+((IMAGE_DOS_HEADER *)engine)->e_lfanew);
-                if (method>=(uintptr_t)engine+0x1000 && method<(uintptr_t)engine+nt->OptionalHeader.SizeOfImage) {
+                uintptr_t method=read_pointer(read_pointer(target->object)+E_SLOT_CLICK);
+                if (image_contains(method)) {
                     int32_t point[2]={x,y};
                     ((void (*)(void *,const int32_t *))method)((void *)target->object,point);
                 } else values[0]=0;
@@ -221,14 +224,7 @@ static void (*group_move)(void *,uint64_t,int,uint16_t,uint64_t);
 static void (*prepare_group_run)(void *);
 static void (*clear_pending_actions)(void *,int);
 static uint16_t (*request_move_path)(void *,const int32_t *);
-static int point_is_writable(uintptr_t address) {
-    MEMORY_BASIC_INFORMATION info;
-    if (!address || (address&7) || VirtualQuery((void *)address,&info,sizeof(info))!=sizeof(info)
-        || info.State!=MEM_COMMIT || (info.Protect&(PAGE_GUARD|PAGE_NOACCESS))
-        || (info.Protect!=PAGE_READWRITE && info.Protect!=PAGE_WRITECOPY)) return 0;
-    return address>=(uintptr_t)info.BaseAddress
-        && address+8<=(uintptr_t)info.BaseAddress+info.RegionSize;
-}
+static int point_is_writable(uintptr_t address);
 static int pending_move(uintptr_t actor,int32_t *count,uintptr_t *action) {
     *action=0;
     if (!read_memory(actor+0x348,count,4) || *count<0 || *count>1) return 0;
@@ -240,7 +236,7 @@ static int pending_move(uintptr_t actor,int32_t *count,uintptr_t *action) {
 static int retarget_active_move(uintptr_t actor,uintptr_t area,int32_t *destination) {
     uint16_t opcode=0; int32_t queued=0; uintptr_t action=0;
     int16_t width=0,height=0;
-    if (!request_move_path || read_pointer(actor)!=(uintptr_t)engine+0x649328
+    if (!request_move_path || read_pointer(actor)!=(uintptr_t)engine+E_VTABLE_SPRITE
         || read_pointer(actor+0x18)!=area || !read_memory(actor+0x3f0,&opcode,2) || opcode!=23
         || !point_is_writable(actor+0x460) || !pending_move(actor,&queued,&action) || queued!=1
         || !read_memory(action+0x70,destination,8)
@@ -309,7 +305,7 @@ static int dispatch_steering(lua_State *state,int operation,int dx,int dy,int fo
                 int live_move=(run || !extend) && run==steering_run && active_move && request_move_path;
                 for (int index=0;live_move && index<member_count;++index) {
                     int32_t queued=0; uintptr_t action=0;
-                    if (read_pointer(actors[index])!=(uintptr_t)engine+0x649328
+                    if (read_pointer(actors[index])!=(uintptr_t)engine+E_VTABLE_SPRITE
                         || !point_is_writable(actors[index]+0x460)
                         || !pending_move(actors[index],&queued,&action)) live_move=0;
                 }

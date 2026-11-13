@@ -10,3 +10,5 @@ __pycache__/
 *.pyc
 *.log
 *.tmp
+/controller-lab/native/*.so
+/controller-lab/native/test_native_linux

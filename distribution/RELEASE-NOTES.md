@@ -1,4 +1,4 @@
-# PST:EE Xbox Controller Mod 0.1.31 - preview
+# PST:EE Xbox Controller Mod 0.2.0 - preview
 
 Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
 
@@ -19,6 +19,33 @@ Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
 - A skips active movies; D-pad selects confirmation buttons, with Quit starting on No.
 - Real mouse click returns to PC mode; a controller button/trigger reactivates Xbox.
 - No top PC/controller status text. Back/View opens Options; Start pauses.
+
+## Changes in 0.2.0
+
+- **Native Linux support (Steam Deck default build).** The Linux `Torment`
+  binary ships unstripped, so every engine function, global and vtable the
+  bridge needs resolves by symbol name from its symbol table
+  (`controller-lab/inspect_linux.py` generates the binding table in
+  `native/linux_offsets.h`). The full executable SHA-256 and both patch-site
+  prologues are verified before anything binds or patches.
+- The Linux bridge is a shared object (`override/libpstcontroller.so`) loaded
+  through a single `LD_PRELOAD` launch option; the installer maintains a
+  space-free symlink and prints the exact line. It hooks `bootstrapLua()` to
+  register `PSTPadNative` on the engine's Lua state - the same registration
+  the Windows injection performs - so M_PSTPAD.lua stays unchanged. No
+  Proton, no separate launcher, no compatibility-tool change.
+- Movie A-button skip and post-movie Escape filtering run through a guarded
+  patch of `CChitin::ProcessEvents`; cursor updates are suppressed through a
+  guarded patch of `CVidMode::SetPointer` while the mod hides the cursor. The
+  Windows build's steering wait/face gates and destination-marker gate are
+  not ported yet; movement still routes through the stock group order path.
+- The stdlib-Python installer now detects the native layout, verifies the
+  Linux executable fingerprint, installs the native payload, and imports
+  saves from `~/.local/share/Planescape Torment - Enhanced Edition`. The
+  Proton/Windows path is unchanged.
+- The native bridge's model tests (nearby interactions, 48 WALK/RUN
+  renewals, 80 RUN retargets, camera follow/pan/zoom, movie guard) run on
+  Linux and in CI: `python3 controller-lab/build_plugin_linux.py --check`.
 
 ## Changes in 0.1.31
 
@@ -41,7 +68,7 @@ Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
   save copying. Original saves are not deleted or imported automatically.
 - Gameplay and native binaries are unchanged from 0.1.29.
 
-Use **PSTEE-Xbox-Controller-v0.1.31-preview.zip** to install. The source ZIP is for
+Use **PSTEE-Xbox-Controller-v0.2.0-preview.zip** to install. The source ZIP is for
 GitHub/building. Close the game, uninstall an older managed version, then install.
 Launch through Play-Controller-Mod.cmd or ControllerLab.exe. Disable Steam Input.
 Read [README.md](README.md) and [CONTROLS.md](CONTROLS.md).

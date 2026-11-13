@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import install  # noqa: E402
 
 FAKE_EXE = b"Fixture only: not a PE executable and never launched."
+FAKE_LINUX_BIN = b"Fixture only: not an ELF executable and never launched."
 STOCK_UI = (
     "-- stock ui fixture\n"
     "function onButton()\n"
@@ -119,7 +120,7 @@ def write_fixture(path: Path, key: bytes, bif_blobs: dict[str, bytes]) -> None:
     (path / "chitin.key").write_bytes(key)
 
 
-def build_fixture_game(path: Path, stock_ui_text: str, extra_files=None) -> None:
+def build_fixture_game(path: Path, stock_ui_text: str, extra_files=None, native: bool = False) -> None:
     path.mkdir(parents=True)
     (path / "data").mkdir()
     (path / "override").mkdir()
@@ -128,7 +129,10 @@ def build_fixture_game(path: Path, stock_ui_text: str, extra_files=None) -> None
     bif = build_bif([(0, 0x408, original)])
     key = build_key([("data/test.bif", bif)], [(b"UI", 0x408, 0, 0)])
     write_fixture(path, key, {"data/test.bif": bif})
-    (path / "Torment.exe").write_bytes(FAKE_EXE)
+    if native:
+        (path / "Torment").write_bytes(FAKE_LINUX_BIN)
+    else:
+        (path / "Torment.exe").write_bytes(FAKE_EXE)
     (path / "engine.lua").write_bytes(b'engine_name="Fixture original profile"\r\nengine_mode=3\r\n')
     (path / "override/unrelated.lua").write_bytes(b"-- keep this unrelated file unchanged\n")
 
@@ -179,9 +183,45 @@ def build_package(root: Path, patch: dict, target: bytes) -> Path:
         shutil.copy2(release / name, payload / name)
     (payload / "ui-patch.json").write_text(json.dumps(patch))
     manifest = {
-        "version": "0.1.31",
+        "version": install.RELEASE_VERSION,
         "preview": True,
         "exeSha256": hashlib.sha256(FAKE_EXE).hexdigest(),
+        "payload": [],
+    }
+    for name in sorted(p.name for p in payload.iterdir()):
+        manifest["payload"].append(
+            {
+                "path": f"payload/{name}",
+                "sha256": hashlib.sha256((payload / name).read_bytes()).hexdigest(),
+            }
+        )
+    (package / "manifest.json").write_text(json.dumps(manifest))
+    return package
+
+
+def build_native_package(root: Path, patch: dict, target: bytes) -> Path:
+    """Native payload package; stub bytes unless a real payload dir is set."""
+    package = root / "package-native" / f"PSTEE-Native-Controller-v{install.RELEASE_VERSION}-preview"
+    payload = package / "payload"
+    payload.mkdir(parents=True)
+    override = os.environ.get("PSTEE_NATIVE_PAYLOAD_DIR")
+    release = Path(override).expanduser() if override else None
+    stubs = {
+        "libpstcontroller.so": b"fixture native bridge bytes",
+        "M_PSTPAD.lua": b"-- fixture controller UI lua\n",
+        "PSTPRAD.bam": b"fixture radial bam",
+        "PSTPSEL.bam": b"fixture selection bam",
+    }
+    for name, stub in stubs.items():
+        if release and (release / name).is_file():
+            shutil.copy2(release / name, payload / name)
+        else:
+            (payload / name).write_bytes(stub)
+    (payload / "ui-patch.json").write_text(json.dumps(patch))
+    manifest = {
+        "version": install.RELEASE_VERSION,
+        "preview": True,
+        "exeSha256": hashlib.sha256(FAKE_LINUX_BIN).hexdigest(),
         "payload": [],
     }
     for name in sorted(p.name for p in payload.iterdir()):
@@ -267,7 +307,7 @@ def test_steam_layout(stock: str) -> None:
         install.steam_roots = lambda: [root]
         found = install.game_candidates()
         assert gamedir.resolve() in [f.resolve() for f in found], found
-        assert install.resolve_game(None).resolve() == gamedir.resolve()
+        assert install.resolve_game(None)[0].resolve() == gamedir.resolve()
 
         # Save import: Proton prefix Documents hold the original profile.
         pfx = root / "steamapps" / "compatdata" / install.APPID / "pfx"
@@ -443,11 +483,93 @@ def test() -> None:
         expect_error(["install", "--game-dir", str(custom), "--package", str(package)], "custom override/UI.menu")
         assert snapshot(custom) == custom_before
 
-        # --- native Linux build (no Torment.exe) is refused clearly --------
+        # --- native launch option: LD_PRELOAD through a space-free symlink ---
+        install.bridge_symlink = lambda: tmp_path / "cache" / "bridge.so"
+        native_package = build_native_package(tmp_path, patch, target)
+        install.SUPPORTED_NATIVE_SHA256 = hashlib.sha256(FAKE_LINUX_BIN).hexdigest()
         native = tmp_path / "native linux"
-        build_fixture_game(native, stock)
-        (native / "Torment.exe").unlink()
-        expect_error(["install", "--game-dir", str(native), "--package", str(package)], "Force Proton")
+        build_fixture_game(native, stock, native=True)
+        native_before = snapshot(native)
+        assert run(["install", "--game-dir", str(native), "--package", str(native_package)]) == 0
+        assert (native / "override/UI.menu").read_bytes() == target
+        assert (native / "override/M_PSTPAD.lua").is_file()
+        assert (native / "override/libpstcontroller.so").is_file()
+        assert not (native / "ControllerLab.exe").exists()
+        assert 'engine_name="Planescape Torment - Controller Lab"' in (native / "engine.lua").read_text()
+        native_state = json.loads((native / install.STATE_DIR / "state.json").read_text())
+        assert native_state["platform"] == "native" and len(native_state["files"]) == 6
+        link = tmp_path / "cache" / "bridge.so"
+        assert link.is_symlink() and link.resolve() == (native / "override/libpstcontroller.so").resolve()
+        assert run(["uninstall", "--game-dir", str(native)]) == 0
+        assert snapshot(native) == native_before
+        assert not link.exists(), "bridge link must be removed on uninstall"
+
+        # --- GOG-style nested layout resolves to the game/ subfolder -------
+        gog = tmp_path / "gog install"
+        build_fixture_game(gog / "game", stock, native=True)
+        resolved, platform = install.resolve_game(str(gog))
+        assert platform == "native" and resolved == (gog / "game").resolve()
+
+        # --- native save import from ~/.local/share -----------------------
+        fake_home = tmp_path / "home"
+        share = fake_home / ".local" / "share"
+        old_save = share / install.PROFILE_OLD / "save" / "000000001"
+        old_save.mkdir(parents=True)
+        (old_save / "BALDUR.gam").write_bytes(b"gam")
+        (old_save / "BALDUR.SAV").write_bytes(b"sav")
+        build_fixture_game(tmp_path / "native for saves", stock, native=True)
+        install.import_saves(tmp_path / "native for saves", "native", home=fake_home)
+        copied = share / install.PROFILE_NEW / "save" / "000000001"
+        assert (copied / "BALDUR.SAV").read_bytes() == b"sav"
+        install.import_saves(tmp_path / "native for saves", "native", home=fake_home)
+        assert sorted(p.name for p in (share / install.PROFILE_NEW / "save").iterdir()) == ["000000001"], "duplicate import"
+
+        # --- native launch option: LD_PRELOAD with the symlink --------------
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            assert run(["launch-option", "--game-dir", str(tmp_path / "native for saves")]) == 0
+        out = buf.getvalue()
+        assert "LD_PRELOAD" in out and "bridge.so" in out and "%command%" in out, out
+        quoted_path = out.split('"')[1] if '"' in out else ""
+        assert quoted_path and " " not in quoted_path, "LD_PRELOAD path must be space-free"
+
+        # --- a game folder without any executable is refused ---------------
+        empty = tmp_path / "no executable"
+        build_fixture_game(empty, stock)
+        (empty / "Torment.exe").unlink()
+        expect_error(["install", "--game-dir", str(empty), "--package", str(package)], "no game executable")
+
+        # --- a same-version package zip is never shadowed by a stale cache --
+        stale_cache = tmp_path / "cache"
+        zipped = tmp_path / "package.zip"
+
+        def zip_native(payload_override: bytes | None = None) -> None:
+            if payload_override is not None:
+                (native_package / "payload" / "libpstcontroller.so").write_bytes(payload_override)
+                manifest = json.loads((native_package / "manifest.json").read_text())
+                for entry in manifest["payload"]:
+                    if entry["path"] == "payload/libpstcontroller.so":
+                        entry["sha256"] = hashlib.sha256(payload_override).hexdigest()
+                (native_package / "manifest.json").write_text(json.dumps(manifest))
+            with zipfile.ZipFile(zipped, "w") as zf:
+                for member in native_package.rglob("*"):
+                    if member.is_file():
+                        zf.write(member, member.relative_to(native_package.parent).as_posix())
+
+        first = tmp_path / "stale game"
+        build_fixture_game(first, stock, native=True)
+        zip_native()
+        assert run(["install", "--game-dir", str(first), "--package", str(zipped), "--cache-dir", str(stale_cache)]) == 0
+        marker = (first / "override" / "libpstcontroller.so").read_bytes()
+        zip_native(b"replacement bridge bytes")
+        assert run(["uninstall", "--game-dir", str(first)]) == 0
+        assert run(["install", "--game-dir", str(first), "--package", str(zipped), "--cache-dir", str(stale_cache)]) == 0
+        updated = (first / "override" / "libpstcontroller.so").read_bytes()
+        assert updated == b"replacement bridge bytes", "stale cache shadowed the new archive"
+        assert updated != marker
 
         # --- launch option string ------------------------------------------
         opt = install.launch_option(game)

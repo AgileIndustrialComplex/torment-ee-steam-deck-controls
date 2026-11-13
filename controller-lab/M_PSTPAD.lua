@@ -1,6 +1,6 @@
 -- PST:EE Xbox prototype. Native input stays inside the foreground game process.
 PSTController = {
-    version = '0.1.31', status = 'Starting Xbox mod', error = nil,
+    version = '0.2.0', status = 'Starting Xbox mod', error = nil,
     buttons = 0, lastTick = 0, lastMove = 0, repeatAt = {},
     armed = false, radial = false, radialIndex = 1, dialogIndex = 1,
     drive = true, moving = false, pausedForRadial = false,
@@ -15,6 +15,10 @@ if type(PSTPadNative) == 'function' then
     pad.native = PSTPadNative
 elseif package and package.loadlib then
     loader, loadError = package.loadlib('override/pstcontroller.dll', 'luaopen_pstcontroller')
+    if not loader then
+        -- Native Linux build: the bridge is a shared object loaded in-process.
+        loader, loadError = package.loadlib('override/libpstcontroller.so', 'luaopen_pstcontroller')
+    end
 else
     loadError = 'Lua package.loadlib is unavailable'
 end

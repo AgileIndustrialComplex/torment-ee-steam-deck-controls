@@ -1,4 +1,4 @@
-# Xbox controls - 0.1.31
+# Xbox controls - 0.2.0
 
 ## PC and controller switching
 

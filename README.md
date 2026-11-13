@@ -8,38 +8,51 @@ dialogue, menu navigation and a compact two-page radial menu.
 
 ## Download
 
-[**Download v0.1.31 for Windows — ready to install**](https://github.com/NiksonLichev/planescape-torment-enhanced-edition-xbox-controller-mod/releases/download/v0.1.31/PSTEE-Xbox-Controller-v0.1.31-preview.zip)
+[**Download v0.2.0 for Windows — ready to install**](https://github.com/NiksonLichev/planescape-torment-enhanced-edition-xbox-controller-mod/releases/download/v0.2.0/PSTEE-Xbox-Controller-v0.2.0-preview.zip)
 
 Extract the complete ZIP and run **Install.cmd**.
 
 The source ZIP is for developers and is not a ready-to-install package.
 ## Linux and Steam Deck
 
-The same mod runs under Proton, but the PowerShell installer does not. A
-stdlib-Python installer with the same file semantics lives in
-**[distribution/linux](distribution/linux/README.md)**; it auto-detects the
-Steam library and installs from Konsole with no root:
+The mod runs on the **native Linux build** (the Steam Deck default) and on the
+Windows build under Proton.
 
-```bash
+**Native Linux (recommended on Deck):** the bridge is a shared object loaded
+before the game starts through one `LD_PRELOAD` launch option - no Proton, no
+separate launcher, no compatibility-tool change. Install with the
+stdlib-Python installer from **[distribution/linux](distribution/linux/README.md)**:
+
+```
 bash distribution/linux/install-deck.sh
 ```
 
-Two things differ from the Windows instructions above:
+Then paste the launch option the installer prints into the game's Steam
+properties, and press Play. Keep Steam Input enabled with a gamepad-only
+template; the bridge reads the Deck's pad through the game's own SDL. The
+Linux `Torment` binary ships unstripped, so the bridge binds every engine
+function by symbol name (`controller-lab/inspect_linux.py` regenerates the
+table per build) and verifies the executable SHA-256 and each patch site
+before hooking anything.
+
+**Windows under Proton** still needs the Windows depot, because the upstream
+bridge is a DLL injected into a suspended `Torment.exe`:
 
 - **Force Proton for the game** (Steam > Properties > Compatibility). Steam
-  ships a native Linux build with no `Torment.exe`, and the mod is a Windows
-  DLL injection, so the Windows depot is required.
+  ships a native Linux build with no `Torment.exe`, and the Windows bridge
+  needs the Windows depot.
 - **Keep Steam Input enabled** with a gamepad-only template. The Linux section
   reads XInput, which is what Steam Input provides for the Deck's built-in pad;
   disabling it there means the mod receives no input. The *Disable Steam Input*
   advice in step 4 above applies to a physical Xbox pad on Windows only.
 
-Because the launcher must be the process Steam starts, Linux also needs this
-Launch Option:
+Because the launcher must be the process Steam starts, the Proton path also
+needs this Launch Option:
 
 ```
 echo "%command%" | sed 's|Torment[.]exe|ControllerLab.exe|' | sh
 ```
+
 ## Screenshots
 
 <img width="1919" height="1079" alt="Screenshot 2026-10-15 164750" src="https://github.com/user-attachments/assets/43535f1c-fd88-41dd-8664-3f98a46e8fba" />
