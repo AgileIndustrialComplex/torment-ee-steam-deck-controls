@@ -61,38 +61,23 @@ jobs:
             exit 1
           fi
 
-      - name: Fetch preview payload
+      - name: Fetch Windows payload
         # The Proton-path tests need the real Windows binaries; they are not
-        # committed. The native payload is built in this job.
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # committed. Upstream's v0.1.31 release is the last one carrying
+        # them, and its payload is version-independent for installer-test
+        # purposes: the tests stamp their own manifest.
         run: |
           set -euo pipefail
-          version=$(grep -oP 'RELEASE_VERSION = "\K[^"]+' distribution/linux/install.py)
-          echo "payload version: $version"
-          url="https://github.com/NiksonLichev/planescape-torment-enhanced-edition-xbox-controller-mod/releases/download/v$version/PSTEE-Xbox-Controller-v$version-preview.zip"
-          if curl -fsSL --max-time 60 "$url" -o "$RUNNER_TEMP/preview.zip"; then
-            echo "PSTEE_PREVIEW_ZIP=$RUNNER_TEMP/preview.zip" >> "$GITHUB_ENV"
-          elif [ -f "dist/PSTEE-Xbox-Controller-v$version-preview.zip" ]; then
-            echo "PSTEE_PREVIEW_ZIP=$PWD/dist/PSTEE-Xbox-Controller-v$version-preview.zip" >> "$GITHUB_ENV"
-          else
-            echo "no Windows payload available; the Windows-path package tests cannot run" >&2
-          fi
+          url="https://github.com/NiksonLichev/planescape-torment-enhanced-edition-xbox-controller-mod/releases/download/v0.1.31/PSTEE-Xbox-Controller-v0.1.31-preview.zip"
+          curl -fsSL --retry 3 "$url" -o "$RUNNER_TEMP/preview.zip"
+          echo "PSTEE_PREVIEW_ZIP=$RUNNER_TEMP/preview.zip" >> "$GITHUB_ENV"
+
+      - name: Assemble native payload
+        working-directory: controller-lab
+        run: python3 make_native_payload.py --out-dir "$RUNNER_TEMP/native-payload"
 
       - name: Installer tests
         working-directory: distribution/linux
         env:
-          PSTEE_NATIVE_PAYLOAD_DIR: ${{ github.workspace }}/controller-lab/native-payload
-        run: |
-          mkdir -p "$PSTEE_NATIVE_PAYLOAD_DIR"
-          cp ../controller-lab/M_PSTPAD.lua "$PSTEE_NATIVE_PAYLOAD_DIR/"
-          cp ../controller-lab/native/libpstcontroller.so "$PSTEE_NATIVE_PAYLOAD_DIR/"
-          python3 - <<'EOF'
-          import sys
-          sys.path.insert(0, "../controller-lab")
-          from radial_asset import build_ui_assets
-          for name, data in build_ui_assets().items():
-              with open(f"../controller-lab/native-payload/{name}", "wb") as fh:
-                  fh.write(data)
-          EOF
-          python test_install.py
+          PSTEE_NATIVE_PAYLOAD_DIR: ${{ runner.temp }}/native-payload
+        run: python test_install.py
