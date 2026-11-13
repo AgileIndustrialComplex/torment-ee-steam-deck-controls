@@ -11,6 +11,13 @@ dialogue and inventory navigation.
 
 That is the whole install.
 
+Prefer a window? Grab
+[PSTEE-Deck-Controller-v0.2.0-x86_64.AppImage](https://github.com/AgileIndustrialComplex/torment-ee-steam-deck-controls/releases/download/v0.2.0/PSTEE-Deck-Controller-v0.2.0-x86_64.AppImage)
+from the releases, double-click it in Desktop Mode, and watch the same
+installation run inside a scrollable log window (the payload is bundled; no
+network needed). The log is also written to
+`~/.cache/pstee-controller-deck/install.log`.
+
 ---
 
 ## Native Linux build (recommended — this is what your Deck has)

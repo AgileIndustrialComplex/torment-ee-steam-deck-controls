@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Plancescape Toement: EE Steam Deck controller support
+Comment=Installs the native PST:EE controller mod (one LD_PRELOAD launch option)
+Exec=pstee-deck-installer
+Icon=pstee-deck-installer
+Terminal=false
+Categories=Game;

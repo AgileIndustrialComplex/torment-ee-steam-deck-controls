@@ -6,9 +6,9 @@
 /controller-lab/native/*.exe
 /controller-lab/native/*.lib
 /controller-lab/native/*.pdb
+/controller-lab/native/*.so
+/controller-lab/native/test_native_linux
 __pycache__/
 *.pyc
 *.log
 *.tmp
-/controller-lab/native/*.so
-/controller-lab/native/test_native_linux

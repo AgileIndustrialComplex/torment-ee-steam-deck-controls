@@ -1,0 +1,29 @@
+#!/bin/sh
+# AppRun for the PST:EE Steam Deck controller installer.
+# Primary UI: the GTK window (python3 + PyGObject, both on SteamOS).
+# Fallback: kdialog's scrollable textbox (SteamOS ships KDE) showing the
+# same log; last resort runs in this terminal.
+set -u
+HERE="$(dirname "$(readlink -f "$0")")"
+PAYLOAD="$HERE/usr/share/pstee"
+LOG="$HOME/.cache/pstee-controller-deck/install.log"
+
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import gi' >/dev/null 2>&1; then
+    exec python3 "$HERE/usr/bin/pstee-gui.py" "$PAYLOAD"
+fi
+
+mkdir -p "$(dirname "$LOG")"
+(
+    cd "$PAYLOAD" || exit 1
+    python3 install.py install --package "$PAYLOAD/package.zip"
+) >"$LOG" 2>&1
+code=$?
+echo "exit: $code" >>"$LOG"
+
+if command -v kdialog >/dev/null 2>&1; then
+    kdialog --title "Planescape Torment: EE Steam Deck controller support" \
+        --textbox "$LOG" 800 560
+    exit "$code"
+fi
+cat "$LOG"
+exit "$code"
