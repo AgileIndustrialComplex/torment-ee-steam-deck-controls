@@ -1,6 +1,6 @@
 -- PST:EE Xbox prototype. Native input stays inside the foreground game process.
 PSTController = {
-    version = '0.2.1', status = 'Starting Xbox mod', error = nil,
+    version = '0.3.0', status = 'Starting Xbox mod', error = nil,
     buttons = 0, lastTick = 0, lastMove = 0, repeatAt = {},
     armed = false, radial = false, radialIndex = 1, dialogIndex = 1,
     drive = true, moving = false, pausedForRadial = false,
@@ -10,6 +10,7 @@ PSTController = {
     moveTurnInterval = 35,
 }
 local pad = PSTController
+function pad.haptic() end  -- replaced when the native bridge provides op 20
 local loader, loadError
 if type(PSTPadNative) == 'function' then
     pad.native = PSTPadNative
@@ -23,6 +24,8 @@ else
     loadError = 'Lua package.loadlib is unavailable'
 end
 if pad.native then
+    -- Steam Input haptics (native op 20): no-op without Steam Input.
+    pad.haptic = function(left, right) pcall(pad.native, 20, left, right) end
     -- The startup loader registered this on the engine's own Lua thread.
 elseif loader then
     local ok, native = pcall(loader)
@@ -206,9 +209,9 @@ end
 function pad.DispatchDialogue()
     local pending = pad.pendingDialog
     pad.pendingDialog = nil
-    if not pending then return onDialogButtonClick() end
+    if not pending then pad.haptic(1200, 1200) return onDialogButtonClick() end
     if not menu('WORLD_DIALOG') then return end
-    if pending.continue then return onDialogButtonClick() end
+    if pending.continue then pad.haptic(1200, 1200) return onDialogButtonClick() end
     -- Reject a queued response if a mouse/keyboard choice already changed it.
     for _, entry in ipairs(dialogTable or {}) do
         if entry == pending.entry and entry.marker == pending.marker then
@@ -911,16 +914,19 @@ function pad.Step()
         pad.zoomDirection,pad.zoomTriggerHeld,pad.zoomRepeat=nil,nil,nil
         pad.nearby=nil
         if not inWorld then closeRadial(); return pad.status end
+        local haptic = pad.haptic
         if lm > 0.35 then
             local angle = math.atan2(lx, ly)
-            pad.radialIndex = (math.floor((angle + math.pi / 8) / (math.pi / 4)) % 8) + 1
+            local index = (math.floor((angle + math.pi / 8) / (math.pi / 4)) % 8) + 1
+            if index ~= pad.radialIndex then pad.radialIndex = index; haptic(1800, 1800) end
         end
         if edge(256) or edge(512) then
             pad.radialPage=pad.radialPage==1 and 2 or 1
             pad.radialEntries=pad.radialPages[pad.radialPage]
+            haptic(2500, 2500)
         end
-        if press(2, now) or press(4, now) then pad.radialIndex = (pad.radialIndex % 8) + 1 end
-        if press(1, now) or press(8, now) then pad.radialIndex = ((pad.radialIndex + 6) % 8) + 1 end
+        if press(2, now) or press(4, now) then pad.radialIndex = (pad.radialIndex % 8) + 1; haptic(1800, 1800) end
+        if press(1, now) or press(8, now) then pad.radialIndex = ((pad.radialIndex + 6) % 8) + 1; haptic(1800, 1800) end
         if edge(8192) or (edge(32768) and not justOpened) then closeRadial()
         elseif edge(4096) then
             local action = pad.radialEntries[pad.radialIndex][2]

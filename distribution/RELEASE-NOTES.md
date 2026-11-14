@@ -1,4 +1,4 @@
-# PST:EE Xbox Controller Mod 0.2.1 - preview
+# PST:EE Xbox Controller Mod 0.3.0 - preview
 
 Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
 
@@ -20,7 +20,25 @@ Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
 - Real mouse click returns to PC mode; a controller button/trigger reactivates Xbox.
 - No top PC/controller status text. Back/View opens Options; Start pauses.
 
-## Changes in 0.2.1
+## Changes in 0.3.0
+
+- **Native Steam Input.** The bridge resolves the game's own
+  `libsteam_api.so` flat API (`SteamAPI_SteamInput_v006`) in-process,
+  initializes ISteamInput, loads the mod's action manifest
+  (`override/steam_input_manifest.vdf`, one "InGame" action set with
+  Move/Camera analog actions, both triggers, and the fourteen digital
+  actions), and reads action states directly instead of the emulated
+  gamepad when Steam reports a controller with bound actions. Bindings
+  you create or edit in Steam's controller configuration apply
+  per-action; layouts stop mattering. Without Steam Input (no Steam
+  client, no controller, nothing bound) polling falls back to the SDL
+  gamecontroller path unchanged.
+- **Haptics.** Native op 20 drives `TriggerVibration`; the radial menu
+  ticks on every sector/page step and dialogues bump on each advance.
+- The pad poll returns three extra values (Steam Input active, gyro
+  pitch/yaw angular velocity) that the Lua side can adopt for
+  gyro-steered camera work later; existing consumers ignore them.
+
 
 - **Fixed: no controller input on a real Steam Deck.** The game's `main()`
   only ever initializes SDL with timer/audio/video, and
@@ -82,7 +100,7 @@ Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
   save copying. Original saves are not deleted or imported automatically.
 - Gameplay and native binaries are unchanged from 0.1.29.
 
-Use **PSTEE-Xbox-Controller-v0.2.1-preview.zip** to install. The source ZIP is for
+Use **PSTEE-Xbox-Controller-v0.3.0-preview.zip** to install. The source ZIP is for
 GitHub/building. Close the game, uninstall an older managed version, then install.
 Launch through Play-Controller-Mod.cmd or ControllerLab.exe. Disable Steam Input.
 Read [README.md](README.md) and [CONTROLS.md](CONTROLS.md).

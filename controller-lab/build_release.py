@@ -96,6 +96,7 @@ def build_linux(game,out,version):
         'install.py':(ROOT/'distribution'/'linux'/'install.py').read_bytes(),
         'payload/M_PSTPAD.lua':(LAB/'M_PSTPAD.lua').read_bytes(),
         'payload/libpstcontroller.so':(LAB/'native/libpstcontroller.so').read_bytes(),
+        'payload/steam_input_manifest.vdf':(LAB/'steam_input_manifest.vdf').read_bytes(),
         'payload/ui-patch.json':json.dumps(patch,separators=(',',':')).encode(),
     }
     release.update({'payload/'+name:data for name,data in build_ui_assets().items()})

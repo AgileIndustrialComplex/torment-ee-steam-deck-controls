@@ -40,7 +40,7 @@ import zipfile
 from pathlib import Path
 
 APPID = "466300"
-RELEASE_VERSION = "0.2.1"
+RELEASE_VERSION = "0.3.0"
 _ARCHIVE = f"PSTEE-Xbox-Controller-v{RELEASE_VERSION}-preview.zip"
 _NATIVE_ARCHIVE = f"PSTEE-Native-Controller-v{RELEASE_VERSION}-preview.zip"
 # Windows binaries come from upstream's releases. Set PSTEE_MOD_SOURCE to a repo
@@ -85,6 +85,7 @@ MOD_FILES_NATIVE = [
     "engine.lua",
     "override/M_PSTPAD.lua",
     "override/libpstcontroller.so",
+    "override/steam_input_manifest.vdf",
     "override/UI.menu",
     "override/PSTPRAD.bam",
     "override/PSTPSEL.bam",
@@ -466,6 +467,7 @@ def build_file_payload(game_dir: Path, package: Path, platform: str) -> dict[str
             "engine.lua": patched_engine(read_engine(game_dir)).encode("utf-8"),
             "override/M_PSTPAD.lua": (package / "payload" / "M_PSTPAD.lua").read_bytes(),
             "override/libpstcontroller.so": (package / "payload" / "libpstcontroller.so").read_bytes(),
+            "override/steam_input_manifest.vdf": (package / "payload" / "steam_input_manifest.vdf").read_bytes(),
             "override/UI.menu": apply_ui_patch(stock_ui, patch),
             "override/PSTPRAD.bam": (package / "payload" / "PSTPRAD.bam").read_bytes(),
             "override/PSTPSEL.bam": (package / "payload" / "PSTPSEL.bam").read_bytes(),

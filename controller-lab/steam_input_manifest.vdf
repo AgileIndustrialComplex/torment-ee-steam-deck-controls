@@ -1,0 +1,73 @@
+"Action Manifest"
+{
+	"configurations"
+	{
+	}
+	"actions"
+	{
+		"InGame"
+		{
+			"title" "#Set_InGame"
+			"StickPadGyro"
+			{
+				"Move"
+				{
+					"title" "#Move"
+					"input_mode" "joystick_move"
+				}
+				"Camera"
+				{
+					"title" "#Camera"
+					"input_mode" "joystick_camera"
+				}
+			}
+			"AnalogTrigger"
+			{
+				"LeftTrigger" "#LeftTrigger"
+				"RightTrigger" "#RightTrigger"
+			}
+			"Button"
+			{
+				"Confirm" "#Confirm"
+				"Cancel" "#Cancel"
+				"Info" "#Info"
+				"Menu" "#Menu"
+				"L1" "#L1"
+				"R1" "#R1"
+				"View" "#View"
+				"Start" "#Start"
+				"L3" "#L3"
+				"R3" "#R3"
+				"DpadUp" "#DpadUp"
+				"DpadDown" "#DpadDown"
+				"DpadLeft" "#DpadLeft"
+				"DpadRight" "#DpadRight"
+			}
+		}
+	}
+	"localization"
+	{
+		"english"
+		{
+			"Set_InGame" "PST:EE Controller Mod"
+			"Move" "Move (Nameless One)"
+			"Camera" "Camera"
+			"LeftTrigger" "Left trigger (zoom modifier)"
+			"RightTrigger" "Right trigger (zoom)"
+			"Confirm" "Confirm / Talk / Open / Use"
+			"Cancel" "Cancel / close radial"
+			"Info" "Inspect"
+			"Menu" "Menu / radial"
+			"L1" "Left bumper"
+			"R1" "Right bumper"
+			"View" "View / Options"
+			"Start" "Start / Pause"
+			"L3" "Left stick click (Walk/Run)"
+			"R3" "Right stick click (select all)"
+			"DpadUp" "D-pad up"
+			"DpadDown" "D-pad down"
+			"DpadLeft" "D-pad left"
+			"DpadRight" "D-pad right"
+		}
+	}
+}

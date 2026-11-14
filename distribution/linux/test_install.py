@@ -211,6 +211,7 @@ def build_native_package(root: Path, patch: dict, target: bytes) -> Path:
         "M_PSTPAD.lua": b"-- fixture controller UI lua\n",
         "PSTPRAD.bam": b"fixture radial bam",
         "PSTPSEL.bam": b"fixture selection bam",
+        "steam_input_manifest.vdf": b'"Action Manifest"\n{\n}\n',
     }
     for name, stub in stubs.items():
         if release and (release / name).is_file():
@@ -497,7 +498,9 @@ def test() -> None:
         assert not (native / "ControllerLab.exe").exists()
         assert 'engine_name="Planescape Torment - Controller Lab"' in (native / "engine.lua").read_text()
         native_state = json.loads((native / install.STATE_DIR / "state.json").read_text())
-        assert native_state["platform"] == "native" and len(native_state["files"]) == 6
+        assert native_state["platform"] == "native" and len(native_state["files"]) == 7
+        manifest = (native / "override/steam_input_manifest.vdf").read_text()
+        assert '"Action Manifest"' in manifest and '"Confirm"' in manifest and '"Move"' in manifest
         link = tmp_path / "cache" / "bridge.so"
         assert link.is_symlink() and link.resolve() == (native / "override/libpstcontroller.so").resolve()
         assert run(["uninstall", "--game-dir", str(native)]) == 0

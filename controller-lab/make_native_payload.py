@@ -41,6 +41,7 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     shutil.copy2(bridge, out / "libpstcontroller.so")
     shutil.copy2(lua, out / "M_PSTPAD.lua")
+    shutil.copy2(lab / "steam_input_manifest.vdf", out / "steam_input_manifest.vdf")
     for name, data in build_ui_assets().items():
         (out / name).write_bytes(data)
 

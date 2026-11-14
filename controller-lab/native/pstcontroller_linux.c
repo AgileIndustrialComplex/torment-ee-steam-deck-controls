@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <link.h>
+#include <dlfcn.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -454,6 +455,273 @@ static void *sdl_controller_open(int index) {
     return ((void *(*)(int))((uintptr_t)engine + LX_SDL_GAME_CONTROLLER_OPEN_ADDR))(index);
 }
 
+/* ------------------------------------------------------------------ */
+/* Steam Input (ISteamInput v6)                                        */
+/* ------------------------------------------------------------------ */
+
+/* The game links libsteam_api.so and initializes the Steam context at
+ * boot. That library exports the flat C wrapper for every ISteamInput
+ * method, so the bridge resolves SteamAPI_SteamInput_v006 plus the
+ * wrappers it needs with dlsym and calls them directly - no vtable
+ * layout and no Steamworks SDK dependency. When Steam Input has a
+ * controller with bound actions the action states become the pad input;
+ * otherwise polling falls back to the SDL gamecontroller path above. */
+#pragma pack(push, 1)
+typedef struct { int eMode; float x, y; unsigned char bActive; } SiAnalogData;
+typedef struct { unsigned char bState, bActive; } SiDigitalData;
+typedef struct { float rotQuatX, rotQuatY, rotQuatZ, rotQuatW;
+                 float posAccelX, posAccelY, posAccelZ;
+                 float rotVelX, rotVelY, rotVelZ; } SiMotionData;
+#pragma pack(pop)
+
+typedef void *(*SiGetterFn)(void);
+typedef int (*SiInitFn)(void *, int);
+typedef void (*SiRunFrameFn)(void *, int);
+typedef int (*SiManifestFn)(void *, const char *);
+typedef unsigned long long (*SiHandleFn)(void *, const char *);
+typedef void (*SiActivateSetFn)(void *, unsigned long long, unsigned long long);
+typedef int (*SiConnectedFn)(void *, unsigned long long *);
+typedef SiDigitalData (*SiDigitalFn)(void *, unsigned long long, unsigned long long);
+typedef SiAnalogData (*SiAnalogFn)(void *, unsigned long long, unsigned long long);
+typedef SiMotionData (*SiMotionFn)(void *, unsigned long long);
+typedef void (*SiVibrateFn)(void *, unsigned long long, unsigned short, unsigned short);
+typedef int (*SiSteamApiInitFn)(void);
+typedef void (*SiSteamApiShutdownFn)(void);
+
+enum { SI_DIGITAL_COUNT = 14, SI_ANALOG_COUNT = 4 };
+static const char *const SI_DIGITAL_NAMES[SI_DIGITAL_COUNT] = {
+    "Confirm", "Cancel", "Info", "Menu", "L1", "R1", "View", "Start",
+    "L3", "R3", "DpadUp", "DpadDown", "DpadLeft", "DpadRight",
+};
+static const unsigned SI_DIGITAL_BITS[SI_DIGITAL_COUNT] = {
+    XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_Y,
+    XINPUT_GAMEPAD_LEFT_SHOULDER, XINPUT_GAMEPAD_RIGHT_SHOULDER,
+    XINPUT_GAMEPAD_BACK, XINPUT_GAMEPAD_START,
+    XINPUT_GAMEPAD_LEFT_THUMB, XINPUT_GAMEPAD_RIGHT_THUMB,
+    XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN,
+    XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT,
+};
+static const char *const SI_ANALOG_NAMES[SI_ANALOG_COUNT] = {
+    "Move", "Camera", "LeftTrigger", "RightTrigger",
+};
+
+static void *si_instance;
+static SiGetterFn si_getter;
+static SiInitFn si_init;
+static SiRunFrameFn si_run_frame;
+static SiManifestFn si_set_manifest;
+static SiHandleFn si_get_set_handle, si_get_digital_handle, si_get_analog_handle;
+static SiActivateSetFn si_activate_set;
+static SiConnectedFn si_get_connected;
+static SiDigitalFn si_get_digital;
+static SiAnalogFn si_get_analog;
+static SiMotionFn si_get_motion;
+static SiVibrateFn si_vibrate;
+static SiSteamApiInitFn si_steam_init;
+static SiSteamApiShutdownFn si_steam_shutdown;
+static int si_init_attempted_self;
+static unsigned long long si_action_set;
+static unsigned long long si_digital[SI_DIGITAL_COUNT];
+static unsigned long long si_analog[SI_ANALOG_COUNT];
+static unsigned long long si_handle;
+/* 0 unstarted, 1 resolved-but-not-ready, 2 ready, 3 unavailable */
+static int si_state;
+static int si_sourced_pad;  /* last poll came from Steam Input actions */
+
+static void si_shutdown_hook(void);
+static void si_resolve_handles(void);
+static int si_game_dir(char *out, size_t cap) {
+    ssize_t length = readlink("/proc/self/exe", out, cap - 64);
+    if (length <= 0 || (size_t)length >= cap - 64) return 0;
+    out[length] = 0;
+    char *slash = strrchr(out, '/');
+    if (!slash) return 0;
+    *slash = 0;
+    return 1;
+}
+
+static void *si_lib;
+static int si_resolve_symbols(void) {
+    struct { const char *name; void **target; } symbols[] = {
+        { "SteamAPI_SteamInput_v006", (void **)&si_getter },
+        { "SteamAPI_ISteamInput_Init", (void **)&si_init },
+        { "SteamAPI_ISteamInput_RunFrame", (void **)&si_run_frame },
+        { "SteamAPI_ISteamInput_SetInputActionManifestFilePath", (void **)&si_set_manifest },
+        { "SteamAPI_ISteamInput_GetActionSetHandle", (void **)&si_get_set_handle },
+        { "SteamAPI_ISteamInput_GetDigitalActionHandle", (void **)&si_get_digital_handle },
+        { "SteamAPI_ISteamInput_GetAnalogActionHandle", (void **)&si_get_analog_handle },
+        { "SteamAPI_ISteamInput_ActivateActionSet", (void **)&si_activate_set },
+        { "SteamAPI_ISteamInput_GetConnectedControllers", (void **)&si_get_connected },
+        { "SteamAPI_ISteamInput_GetDigitalActionData", (void **)&si_get_digital },
+        { "SteamAPI_ISteamInput_GetAnalogActionData", (void **)&si_get_analog },
+        { "SteamAPI_ISteamInput_GetMotionData", (void **)&si_get_motion },
+        { "SteamAPI_ISteamInput_TriggerVibration", (void **)&si_vibrate },
+        { "SteamAPI_InitSafe", (void **)&si_steam_init },
+        { "SteamAPI_Shutdown", (void **)&si_steam_shutdown },
+    };
+    /* The game dlopens its libsteam_api.so with a local handle, so
+     * RTLD_DEFAULT never sees those symbols. Opening the same file by
+     * absolute path returns the already-loaded object (just one more
+     * reference) and its flat exports resolve directly. */
+    if (!si_lib) {
+        char game_dir[4096];
+        char path[4200];
+        if (si_game_dir(game_dir, sizeof(game_dir))) {
+            snprintf(path, sizeof(path), "%s/libsteam_api.so", game_dir);
+            si_lib = dlopen(path, RTLD_LAZY);
+        }
+        if (si_lib) loader_note("Steam Input: using the game's libsteam_api.so");
+    }
+    void *scope = si_lib ? si_lib : RTLD_DEFAULT;
+    for (size_t i = 0; i < sizeof(symbols) / sizeof(symbols[0]); ++i) {
+        *symbols[i].target = dlsym(scope, symbols[i].name);
+        if (!*symbols[i].target) {
+            loader_note("Steam Input: symbol missing, staying on the SDL gamecontroller path");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void si_shutdown_hook(void) {
+    if (si_init_attempted_self && si_steam_shutdown && si_state == 2) {
+        si_steam_shutdown();
+    }
+}
+
+/* Lazy: runs from the first pad poll, after the game initialized Steam.
+ * The budget is wall time, not polls: the tick runs per frame, so a poll
+ * count would expire in seconds while the game is still booting. */
+static unsigned si_first_attempt_tick;
+static void si_try_init(void) {
+    if (si_state == 2 || si_state == 3) return;
+    if (!si_getter && !si_resolve_symbols()) { si_state = 3; return; }
+    if (!si_first_attempt_tick) si_first_attempt_tick = get_ticks ? get_ticks() : 0;
+    if (si_first_attempt_tick && get_ticks() - si_first_attempt_tick > 180000) {
+        loader_note("Steam Input: no Steam context after 180s; SDL gamecontroller only");
+        si_state = 3;
+        return;
+    }
+    void *instance = si_getter();
+    if (!instance && si_steam_init && !si_init_attempted_self) {
+        /* Beamdog's Linux build runs Steam in a child process; the main
+         * process never calls SteamAPI_Init, so the interface accessors
+         * stay null here. Initialize our own context (SteamAPI_InitSafe)
+         * with the same lib, user and appid: one extra steamclient pipe. */
+        si_init_attempted_self = 1;
+        if (si_steam_init()) {
+            loader_note("Steam Input: SteamAPI initialized by the bridge");
+            atexit(si_shutdown_hook);
+        } else {
+            loader_note("Steam Input: SteamAPI_InitSafe failed; is the Steam client running?");
+        }
+        instance = si_getter();
+    }
+    if (!instance) return;              /* SteamAPI not initialized yet */
+    if (!si_init(instance, 1)) return;  /* client not ready; retry next poll */
+    char game_dir[4096];
+    if (si_game_dir(game_dir, sizeof(game_dir))) {
+        char manifest[4200];
+        snprintf(manifest, sizeof(manifest), "%s/override/steam_input_manifest.vdf", game_dir);
+        if (si_set_manifest(instance, manifest)) {
+            loader_note("Steam Input: action manifest loaded from override/");
+        } else {
+            loader_note("Steam Input: manifest not loaded; only user-bound actions will be active");
+        }
+    }
+    si_instance = instance;
+    si_state = 2;
+    si_resolve_handles();
+    unsigned long long handles[16];
+    int count = si_get_connected(instance, handles);
+    if (count > 0) {
+        si_handle = handles[0];
+        if (si_action_set) si_activate_set(instance, si_handle, si_action_set);
+    }
+    char line[128];
+    int n = snprintf(line, sizeof(line),
+        "Steam Input: ready (set handle %llu, %d controller(s))",
+        (unsigned long long)si_action_set, count);
+    if (n > 0 && n < (int)sizeof(line)) loader_note(line);
+}
+
+/* Action handles can resolve only after the Steam client has registered
+ * the manifest and (usually) loaded a configuration for the app, both of
+ * which happen asynchronously after SetInputActionManifestFilePath. Re-run
+ * the lookups while the set handle is still zero. */
+static void si_resolve_handles(void) {
+    if (!si_instance) return;
+    if (si_action_set) return;
+    si_action_set = si_get_set_handle(si_instance, "InGame");
+    if (!si_action_set) return;
+    for (int i = 0; i < SI_DIGITAL_COUNT; ++i)
+        si_digital[i] = si_get_digital_handle(si_instance, SI_DIGITAL_NAMES[i]);
+    for (int i = 0; i < SI_ANALOG_COUNT; ++i)
+        si_analog[i] = si_get_analog_handle(si_instance, SI_ANALOG_NAMES[i]);
+    if (si_handle) si_activate_set(si_instance, si_handle, si_action_set);
+    loader_note("Steam Input: action set resolved");
+}
+
+static short si_stick_axis(float value) {
+    if (value > 1.0f) value = 1.0f;
+    if (value < -1.0f) value = -1.0f;
+    return (short)(value * 32767.0f);
+}
+
+/* Fills the XInput-shaped state from action states. Returns 1 when
+ * Steam Input produced input (at least one bound action was active);
+ * 0 means: no controller or nothing bound, use the SDL fallback. */
+static int si_poll(XINPUT_STATE *state, float *gyro_pitch, float *gyro_yaw) {
+    if (si_state != 2) return 0;
+    si_run_frame(si_instance, 1);
+    si_resolve_handles();
+    unsigned long long handles[16];
+    int count = si_get_connected(si_instance, handles);
+    if (count <= 0) { si_handle = 0; return 0; }
+    if (si_handle != handles[0]) {
+        si_handle = handles[0];
+        if (si_action_set) si_activate_set(si_instance, si_handle, si_action_set);
+        loader_note("Steam Input: controller connected");
+    }
+    int any_active = 0;
+    unsigned buttons = 0;
+    for (int i = 0; i < SI_DIGITAL_COUNT; ++i) {
+        if (!si_digital[i]) continue;
+        SiDigitalData data = si_get_digital(si_instance, si_handle, si_digital[i]);
+        if (!data.bActive) continue;
+        any_active = 1;
+        if (data.bState) buttons |= SI_DIGITAL_BITS[i];
+    }
+    if (!any_active) return 0;
+    float move_x = 0, move_y = 0, camera_x = 0, camera_y = 0, left = 0, right = 0;
+    float values[SI_ANALOG_COUNT][2] = {{0}};
+    for (int i = 0; i < SI_ANALOG_COUNT; ++i) {
+        if (!si_analog[i]) continue;
+        SiAnalogData data = si_get_analog(si_instance, si_handle, si_analog[i]);
+        if (!data.bActive) continue;
+        values[i][0] = data.x;
+        values[i][1] = data.y;
+    }
+    move_x = values[0][0]; move_y = values[0][1];
+    camera_x = values[1][0]; camera_y = values[1][1];
+    left = values[2][0]; right = values[3][0];
+    state->Gamepad.wButtons = buttons;
+    state->Gamepad.sThumbLX = si_stick_axis(move_x);
+    state->Gamepad.sThumbLY = (short)-si_stick_axis(move_y);   /* SI y is down */
+    state->Gamepad.sThumbRX = si_stick_axis(camera_x);
+    state->Gamepad.sThumbRY = (short)-si_stick_axis(camera_y);
+    int l = (int)(left * 255.0f), r = (int)(right * 255.0f);
+    state->Gamepad.bLeftTrigger = (unsigned char)(l < 0 ? 0 : l > 255 ? 255 : l);
+    state->Gamepad.bRightTrigger = (unsigned char)(r < 0 ? 0 : r > 255 ? 255 : r);
+    state->dwPacketNumber = 1;
+    if (gyro_pitch && gyro_yaw) {
+        SiMotionData motion = si_get_motion(si_instance, si_handle);
+        *gyro_pitch = motion.rotVelX;
+        *gyro_yaw = motion.rotVelZ;
+    }
+    return 1;
+}
+
 /* The game's main() calls SDL_Init(0x31) - timer, audio, video - and
  * CChitin::initJoysticks is an empty stub in this build, so the joystick
  * and gamecontroller subsystems never come up on their own and
@@ -492,6 +760,9 @@ static void open_first_gamepad(void) {
 static int poll_pad(XINPUT_STATE *state) {
     memset(state, 0, sizeof(*state));
     if (!engine) return 0;
+    si_try_init();
+    si_sourced_pad = si_poll(state, NULL, NULL);
+    if (si_sourced_pad) return 1;
     if (!gamepad) open_first_gamepad();
     if (!gamepad) return 0;
     unsigned buttons = 0;
@@ -799,6 +1070,18 @@ static int dispatch(lua_State *state) {
         return 1;
     }
     if (operation == 19) { push_number(state, controller_camera_follow(a, focused)); return 1; }
+    if (operation == 20) {
+        /* Haptics through Steam Input: a = left, b = right intensity. */
+        int fired = 0;
+        if (si_state == 2 && si_handle) {
+            unsigned left = a < 0 ? 0 : (a > 65535 ? 65535 : a);
+            unsigned right = b < 0 ? 0 : (b > 65535 ? 65535 : b);
+            si_vibrate(si_instance, si_handle, (unsigned short)left, (unsigned short)right);
+            fired = 1;
+        }
+        push_number(state, fired);
+        return 1;
+    }
     if (window && width > 0 && height > 0) {
         if (focused && operation == 1) {
             if (a < 0) a = 0;
@@ -819,7 +1102,17 @@ static int dispatch(lua_State *state) {
     }
     if (!window && operation == 3 && !b && a > 0) keyboard_event(NULL, a, 0);
     XINPUT_STATE pad;
+    float gyro_pitch = 0.0f, gyro_yaw = 0.0f;
     int connected = poll_pad(&pad);
+    /* Extra returns beyond the Windows bridge's 20: Steam Input active
+     * and gyro angular velocity (deg/s). The Lua side ignores them until
+     * it asks, so the shared contract stays intact. */
+    int si_active = si_sourced_pad;
+    if (si_state == 2 && si_handle) {
+        SiMotionData motion = si_get_motion(si_instance, si_handle);
+        gyro_pitch = motion.rotVelX;
+        gyro_yaw = motion.rotVelZ;
+    }
     if (!focused) memset(&pad.Gamepad, 0, sizeof(pad.Gamepad));
     double px = 0, py = 0;
     int position_valid = focused && player_screen_position(&px, &py);
@@ -827,15 +1120,16 @@ static int dispatch(lua_State *state) {
     uintptr_t chitin = read_pointer((uintptr_t)engine + E_CHITIN_PTR);
     uintptr_t game = read_pointer(chitin + CHITIN_GAME);
     if (!read_memory(game + 0xa2b0, &selected_count, 4) || selected_count < 0 || selected_count > 6) selected_count = 0;
-    double values[20] = {
+    double values[23] = {
         connected, pad.Gamepad.wButtons, pad.Gamepad.sThumbLX, pad.Gamepad.sThumbLY,
         pad.Gamepad.sThumbRX, pad.Gamepad.sThumbRY, pad.Gamepad.bLeftTrigger,
         pad.Gamepad.bRightTrigger, x, y, width, height, get_ticks(), focused,
         px, py, position_valid, selected_count,
-        (uint32_t)__atomic_load_n(&physical_click_serial, __ATOMIC_RELAXED), movie_playing()
+        (uint32_t)__atomic_load_n(&physical_click_serial, __ATOMIC_RELAXED), movie_playing(),
+        si_active, gyro_pitch, gyro_yaw
     };
-    for (size_t index = 0; index < 20; ++index) push_number(state, values[index]);
-    return 20;
+    for (size_t index = 0; index < 23; ++index) push_number(state, values[index]);
+    return 23;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1285,7 +1579,7 @@ static int initialized;
 static int bridge_initialize(void) {
     if (initialized) return 1;
     loader_log = open_side_log("controller-loader.log");
-    loader_note("Controller Lab native bridge 0.2.1 (Linux)");
+    loader_note("Controller Lab native bridge 0.3.0 (Linux)");
     if (!controller_lab_profile()) {
         loader_note("Refused: the isolated Controller Lab profile is missing");
         return 0;
