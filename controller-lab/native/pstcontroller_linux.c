@@ -1581,7 +1581,7 @@ static int initialized;
 static int bridge_initialize(void) {
     if (initialized) return 1;
     loader_log = open_side_log("controller-loader.log");
-    loader_note("Controller Lab native bridge 0.3.0 (Linux)");
+    loader_note("Controller Lab native bridge 0.3.1 (Linux)");
     if (!controller_lab_profile()) {
         loader_note("Refused: the isolated Controller Lab profile is missing");
         return 0;

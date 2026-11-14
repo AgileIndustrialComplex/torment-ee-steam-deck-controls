@@ -1,6 +1,6 @@
 -- PST:EE Xbox prototype. Native input stays inside the foreground game process.
 PSTController = {
-    version = '0.3.0', status = 'Starting Xbox mod', error = nil,
+    version = '0.3.1', status = 'Starting Xbox mod', error = nil,
     buttons = 0, lastTick = 0, lastMove = 0, repeatAt = {},
     armed = false, radial = false, radialIndex = 1, dialogIndex = 1,
     drive = true, moving = false, pausedForRadial = false,
@@ -198,6 +198,32 @@ function pad.RadialFrame(index)
     -- Only the tactical BAM has frame 2 in the requested sequence.
     return pad.radialIndex==index and pad.RadialBam(index)=='TACTBUTT' and 2 or 0
 end
+-- START_MAIN pad debug overlay (top-left): what the mod actually receives.
+local PAD_BIT_NAMES = {
+    {1,'Up'},{2,'Down'},{4,'Left'},{8,'Right'},{16,'Start'},{32,'View'},
+    {64,'L3'},{128,'R3'},{256,'L1'},{512,'R1'},{4096,'A'},{8192,'B'},
+    {16384,'X'},{32768,'Y'},
+}
+function pad.DebugOverlay()
+    if pad.error then return 'pad error: ' .. tostring(pad.error) end
+    local d = pad.debug
+    if not d then return 'pad: waiting for first poll' end
+    local source = 'no pad'
+    if d.connected == 1 then source = d.si == 1 and 'Steam Input' or 'SDL gamepad' end
+    local state = d.active and 'active' or (d.armed and 'armed' or 'idle')
+    if d.movie == 1 then state = state .. ' (movie)' end
+    local names = {}
+    for _, entry in ipairs(PAD_BIT_NAMES) do
+        if math.floor(d.buttons / entry[1]) % 2 == 1 then names[#names+1] = entry[2] end
+    end
+    return table.concat({
+        string.format('pad: %s | %s', source, state),
+        'buttons: ' .. (#names > 0 and table.concat(names, ' ') or '-'),
+        string.format('L %+6d %+6d  R %+6d', d.lx or 0, d.ly or 0, d.rx or 0),
+        string.format('LT %3d  RT %3d', d.lt or 0, d.rt or 0),
+    }, '\n')
+end
+
 function pad.EnsureDriver()
     if not Infinity_IsMenuOnStack('PST_CONTROLLER_DRIVER') then
         Infinity_PushMenu('PST_CONTROLLER_DRIVER')
@@ -767,7 +793,11 @@ end
 function pad.Step()
     if not pad.native then return 'Xbox mod unavailable: ' .. tostring(pad.error) end
     local connected, buttons, rawLX, rawLY, rawRX, rawRY, lt, rt,
-        mx, my, width, height, now, focused, playerX, playerY, positionValid, selectedCount, physicalClicks, moviePlaying = pad.native(0)
+        mx, my, width, height, now, focused, playerX, playerY, positionValid, selectedCount, physicalClicks, moviePlaying, siActive = pad.native(0)
+    -- Snapshot for the START_MAIN pad debug overlay.
+    pad.debug = { connected=connected, buttons=buttons, lx=rawLX, ly=rawLY,
+        rx=rawRX, ry=rawRY, lt=lt, rt=rt, si=siActive,
+        armed=pad.armed, active=pad.controllerActive, movie=moviePlaying }
     if now - pad.lastTick < 16 then return pad.status end
     local elapsed = pad.lastTick == 0 and 0.016 or clamp((now - pad.lastTick) / 1000, 0, 0.05)
     pad.lastTick = now

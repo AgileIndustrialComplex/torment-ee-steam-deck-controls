@@ -1,4 +1,4 @@
-# Controller implementation - 0.3.0
+# Controller implementation - 0.3.1
 
 ## Supported target and isolation
 
@@ -57,7 +57,7 @@ Operation 19 records/relinquishes the mod-owned lock or explicitly releases it
 for RS/PC edge panning. User follow away from a PC screen edge is preserved.
 Operation 18 uses the stock world view command; RT+RS uses zoom input.
 
-## Linux implementation - 0.3.0
+## Linux implementation - 0.3.1
 
 The Linux Torment binary (Steam build 25492483, same 3.2.2.0 content as the
 Windows target; the stock UI.menu is byte-identical) ships unstripped, so

@@ -40,7 +40,7 @@ import zipfile
 from pathlib import Path
 
 APPID = "466300"
-RELEASE_VERSION = "0.3.0"
+RELEASE_VERSION = "0.3.1"
 _ARCHIVE = f"PSTEE-Xbox-Controller-v{RELEASE_VERSION}-preview.zip"
 _NATIVE_ARCHIVE = f"PSTEE-Native-Controller-v{RELEASE_VERSION}-preview.zip"
 # Windows binaries come from upstream's releases. Set PSTEE_MOD_SOURCE to a repo

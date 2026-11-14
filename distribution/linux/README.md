@@ -12,7 +12,7 @@ dialogue and inventory navigation.
 That is the whole install.
 
 Prefer a window? Grab
-[PSTEE-Deck-Controller-v0.3.0-x86_64.AppImage](https://github.com/AgileIndustrialComplex/torment-ee-steam-deck-controls/releases/download/v0.3.0/PSTEE-Deck-Controller-v0.3.0-x86_64.AppImage)
+[PSTEE-Deck-Controller-v0.3.1-x86_64.AppImage](https://github.com/AgileIndustrialComplex/torment-ee-steam-deck-controls/releases/download/v0.3.1/PSTEE-Deck-Controller-v0.3.1-x86_64.AppImage)
 from the releases, double-click it in Desktop Mode, and watch the same
 installation run inside a scrollable log window (the payload is bundled; no
 network needed). The log is also written to
@@ -65,7 +65,7 @@ Manual path if auto-detection fails:
 
 ```bash
 ./install-deck.sh --game-dir "/run/media/deck/sdcard/steamapps/common/Planescape Torment Enhanced Edition"
-./install-deck.sh --package /path/to/PSTEE-Native-Controller-v0.3.0-preview.zip
+./install-deck.sh --package /path/to/PSTEE-Native-Controller-v0.3.1-preview.zip
 ```
 
 GOG installs with a `game/` subfolder work too — pass the outer folder.
@@ -107,7 +107,7 @@ installing into a Proton game copy.
 bash install-deck.sh                     # detect + install
 bash install-deck.sh --import-saves      # also copy existing local saves
 bash install-deck.sh --game-dir "/run/media/deck/sdcard/steamapps/common/Planescape Torment Enhanced Edition"
-bash install-deck.sh --package /path/to/PSTEE-Native-Controller-v0.3.0-preview.zip
+bash install-deck.sh --package /path/to/PSTEE-Native-Controller-v0.3.1-preview.zip
 bash uninstall-deck.sh                   # restore original files
 python3 install.py status                # per-file installed/DIFF report
 python3 install.py detect                # what was found, and its state
@@ -133,7 +133,7 @@ verified against `manifest.json` before anything is written. Set
 ## Tests
 
 ```bash
-PSTEE_PREVIEW_ZIP=/path/to/PSTEE-Xbox-Controller-v0.3.0-preview.zip python3 test_install.py
+PSTEE_PREVIEW_ZIP=/path/to/PSTEE-Xbox-Controller-v0.3.1-preview.zip python3 test_install.py
 ```
 
 Real payload binaries are not committed, so the tests take them from a release

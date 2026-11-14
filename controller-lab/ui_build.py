@@ -54,6 +54,23 @@ def build_ui(source_ui):
 '''
     ui=ui.replace(inventory,inventory[:-1]+split_dispatch+'}',1)
     ui,navigation_lua=build_navigation(ui)
+    # Live pad readout on the main menu's top-left corner: connection, input
+    # source, pressed buttons, sticks and triggers - exactly what the mod
+    # receives, so a Deck can be diagnosed at a glance before arming.
+    start_main=named_menus(ui)['START_MAIN']
+    pad_debug='''
+    label
+    {
+        name 'PST_PAD_DEBUG'
+        area 0 0 360 150
+        ignoreFocus 1
+        text lua "PSTController.DebugOverlay()"
+        text style "button"
+        text point 12
+        text shadow 1
+    }
+'''
+    ui=ui.replace(start_main,start_main[:-1]+pad_debug+'}',1)
     # A native overlay may not render the normal driver underneath it. Give
     # visible modal dialogs their own guarded render poll, without any input.
     for name,body in named_menus(ui).items():

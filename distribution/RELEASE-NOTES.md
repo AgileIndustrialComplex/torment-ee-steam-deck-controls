@@ -1,4 +1,4 @@
-# PST:EE Xbox Controller Mod 0.3.0 - preview
+# PST:EE Xbox Controller Mod 0.3.1 - preview
 
 Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
 
@@ -20,7 +20,15 @@ Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
 - Real mouse click returns to PC mode; a controller button/trigger reactivates Xbox.
 - No top PC/controller status text. Back/View opens Options; Start pauses.
 
-## Changes in 0.3.0
+## Changes in 0.3.1
+
+- **Pad debug overlay on the main menu.** A small readout in the top-left
+  corner shows exactly what the mod receives: connection and input source
+  (Steam Input / SDL gamepad / no pad), armed/active state, every pressed
+  button by name, raw stick values and trigger levels. If the overlay
+  shows your presses, input is reaching the mod; if it shows
+  "no pad", the bridge sees no controller at all.
+
 
 - **Native Steam Input.** The bridge resolves the game's own
   `libsteam_api.so` flat API (`SteamAPI_SteamInput_v006`) in-process,
@@ -100,7 +108,7 @@ Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
   save copying. Original saves are not deleted or imported automatically.
 - Gameplay and native binaries are unchanged from 0.1.29.
 
-Use **PSTEE-Xbox-Controller-v0.3.0-preview.zip** to install. The source ZIP is for
+Use **PSTEE-Xbox-Controller-v0.3.1-preview.zip** to install. The source ZIP is for
 GitHub/building. Close the game, uninstall an older managed version, then install.
 Launch through Play-Controller-Mod.cmd or ControllerLab.exe. Disable Steam Input.
 Read [README.md](README.md) and [CONTROLS.md](CONTROLS.md).
