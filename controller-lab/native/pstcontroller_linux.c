@@ -583,6 +583,9 @@ static int si_resolve_symbols(void) {
     return 1;
 }
 
+/* DSO destructor (not atexit: that drags in a GLIBC_2.34 symbol) - runs
+ * at process exit while the steamclient pipe is still alive. */
+__attribute__((destructor))
 static void si_shutdown_hook(void) {
     if (si_init_attempted_self && si_steam_shutdown && si_state == 2) {
         si_steam_shutdown();
@@ -611,7 +614,6 @@ static void si_try_init(void) {
         si_init_attempted_self = 1;
         if (si_steam_init()) {
             loader_note("Steam Input: SteamAPI initialized by the bridge");
-            atexit(si_shutdown_hook);
         } else {
             loader_note("Steam Input: SteamAPI_InitSafe failed; is the Steam client running?");
         }

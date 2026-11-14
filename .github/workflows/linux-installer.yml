@@ -44,13 +44,14 @@ jobs:
         run: python3 build_plugin_linux.py --check
 
       - name: Bridge symbol baseline
-        # The game runs on SteamOS (glibc 2.35); keep the required baseline at
-        # or below it so the shared object loads wherever the game does.
+        # SteamOS 3.x ships glibc 2.35. GLIBC_2.34 is the merge point where
+        # libdl/libpthread folded into libc (dlopen/dlsym); the baseline is
+        # 2.34, still below what the Deck provides.
         working-directory: controller-lab/native
         run: |
           versions=$(objdump -T libpstcontroller.so | grep -oE 'GLIBC_[0-9.]+' | sort -u)
           echo "$versions"
-          bad=$(echo "$versions" | awk -F. '$2 > 17 {print}' | head -1)
+          bad=$(echo "$versions" | awk -F. '$2 > 34 {print}' | head -1)
           if [ -n "$bad" ]; then
             echo "FAIL: $bad exceeds the GLIBC_2.17 baseline"
             exit 1
