@@ -76,6 +76,12 @@ BINDINGS = [
     ("sdl_show_cursor", "SDL_ShowCursor", "func", ""),
     ("sdl_add_event_watch", "SDL_AddEventWatch", "func", ""),
     ("sdl_num_joysticks", "SDL_NumJoysticks", "func", ""),
+    # The game main() inits SDL with 0x31 (timer/audio/video) only and
+    # CChitin::initJoysticks is an empty stub, so the bridge must add the
+    # joystick/gamecontroller subsystems itself.
+    ("sdl_init", "SDL_Init", "func", ""),
+    ("sdl_was_init", "SDL_WasInit", "func", ""),
+    ("sdl_game_controller_name", "SDL_GameControllerName", "func", ""),
     ("sdl_is_game_controller", "SDL_IsGameController", "func", ""),
     ("sdl_game_controller_open", "SDL_GameControllerOpen", "func", ""),
     ("sdl_game_controller_get_axis", "SDL_GameControllerGetAxis", "func", ""),

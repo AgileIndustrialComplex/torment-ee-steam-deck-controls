@@ -1,4 +1,4 @@
-# PST:EE Xbox Controller Mod 0.2.0 - preview
+# PST:EE Xbox Controller Mod 0.2.1 - preview
 
 Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
 
@@ -19,6 +19,20 @@ Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
 - A skips active movies; D-pad selects confirmation buttons, with Quit starting on No.
 - Real mouse click returns to PC mode; a controller button/trigger reactivates Xbox.
 - No top PC/controller status text. Back/View opens Options; Start pauses.
+
+## Changes in 0.2.1
+
+- **Fixed: no controller input on a real Steam Deck.** The game's `main()`
+  only ever initializes SDL with timer/audio/video, and
+  `CChitin::initJoysticks()` is an empty stub in this build, so the joystick
+  and gamecontroller subsystems never came up: the bridge's pad polling
+  returned "no controller" forever on a physical Deck. The bridge now adds
+  the subsystems itself (SDL_Init is refcounted and safe to call before or
+  after the game's own init) and retries lazily at every poll. The loader
+  log gains the joystick count, and the first opened pad is logged by name.
+- The installer now upgrades in place when the installed version differs
+  from the package version (it removes the old files first, backups kept);
+  same-version installs still ask for an uninstall.
 
 ## Changes in 0.2.0
 
@@ -68,7 +82,7 @@ Xbox/XInput support for the verified Windows x64 PST:EE 3.2.2.0 executable.
   save copying. Original saves are not deleted or imported automatically.
 - Gameplay and native binaries are unchanged from 0.1.29.
 
-Use **PSTEE-Xbox-Controller-v0.2.0-preview.zip** to install. The source ZIP is for
+Use **PSTEE-Xbox-Controller-v0.2.1-preview.zip** to install. The source ZIP is for
 GitHub/building. Close the game, uninstall an older managed version, then install.
 Launch through Play-Controller-Mod.cmd or ControllerLab.exe. Disable Steam Input.
 Read [README.md](README.md) and [CONTROLS.md](CONTROLS.md).

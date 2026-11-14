@@ -40,7 +40,7 @@ import zipfile
 from pathlib import Path
 
 APPID = "466300"
-RELEASE_VERSION = "0.2.0"
+RELEASE_VERSION = "0.2.1"
 _ARCHIVE = f"PSTEE-Xbox-Controller-v{RELEASE_VERSION}-preview.zip"
 _NATIVE_ARCHIVE = f"PSTEE-Native-Controller-v{RELEASE_VERSION}-preview.zip"
 # Windows binaries come from upstream's releases. Set PSTEE_MOD_SOURCE to a repo
@@ -520,7 +520,13 @@ def cmd_install(args) -> int:
 
     state = load_state(game_dir)
     if state and state.get("status") == "installed":
-        raise InstallError("The mod is already installed. Run 'uninstall' first.")
+        package_version = str(manifest.get("version"))
+        installed_version = state.get("version")
+        if installed_version == package_version:
+            raise InstallError("The mod is already installed. Run 'uninstall' first.")
+        print(f"Upgrading: mod v{installed_version} is installed, package is v{package_version}.")
+        print("Removing the old files first (backups are kept)...")
+        cmd_uninstall_files(game_dir, state, check_installed=False)
 
     payload = build_file_payload(game_dir, package, platform)
     files = mod_files(platform)
@@ -620,6 +626,22 @@ def cmd_uninstall_files(game_dir: Path, state: dict, check_installed: bool = Tru
             atomic_write(target, backup.read_bytes())
         elif target.is_file():
             target.unlink()
+
+
+def cmd_reinstall(args) -> int:
+    """Uninstall (if installed) and install again from the same package."""
+    game_dir, _platform = resolve_game(args.game_dir)
+    state = load_state(game_dir)
+    if state and state.get("status") == "installed":
+        print("Removing the current install first (backups are kept)...")
+        cmd_uninstall_files(game_dir, state, check_installed=False)
+        state["status"] = "uninstalled"
+        atomic_write(game_dir / STATE_DIR / "state.json", json.dumps(state, indent=2).encode())
+        if state.get("platform") == "native":
+            unlink_bridge()
+    else:
+        print("Nothing installed yet; running a plain install.")
+    return cmd_install(args)
 
 
 def cmd_uninstall(args) -> int:
@@ -865,7 +887,7 @@ def cmd_launch_option(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="PST:EE controller mod installer for Linux/Steam Deck")
-    parser.add_argument("command", choices=["install", "uninstall", "status", "detect", "launch-option"])
+    parser.add_argument("command", choices=["install", "reinstall", "uninstall", "status", "detect", "launch-option"])
     parser.add_argument("--game-dir", help="folder containing Torment.exe")
     parser.add_argument("--package", help="preview ZIP or extracted package folder")
     parser.add_argument("--cache-dir", default="~/.cache/pstee-controller-deck")
@@ -875,6 +897,7 @@ def main(argv: list[str] | None = None) -> int:
 
     handlers = {
         "install": cmd_install,
+        "reinstall": cmd_reinstall,
         "uninstall": cmd_uninstall,
         "status": cmd_status,
         "detect": cmd_detect,

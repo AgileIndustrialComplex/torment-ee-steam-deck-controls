@@ -504,6 +504,25 @@ def test() -> None:
         assert snapshot(native) == native_before
         assert not link.exists(), "bridge link must be removed on uninstall"
 
+        # --- reinstall: one command, fresh backup set ----------------------
+        assert run(["install", "--game-dir", str(native), "--package", str(native_package)]) == 0
+        third = json.loads((native / install.STATE_DIR / "state.json").read_text())
+        assert run(["reinstall", "--game-dir", str(native), "--package", str(native_package)]) == 0
+        assert (native / "override/libpstcontroller.so").is_file()
+        assert link.is_symlink(), "reinstall must recreate the bridge link"
+        fourth = json.loads((native / install.STATE_DIR / "state.json").read_text())
+        assert fourth["status"] == "installed"
+        assert fourth["backupSet"] != third["backupSet"]
+        assert run(["uninstall", "--game-dir", str(native)]) == 0
+        assert snapshot(native) == native_before
+        assert not link.exists()
+
+        # reinstall with nothing installed behaves like install
+        assert run(["reinstall", "--game-dir", str(native), "--package", str(native_package)]) == 0
+        assert (native / "override/libpstcontroller.so").is_file()
+        assert run(["uninstall", "--game-dir", str(native)]) == 0
+        assert snapshot(native) == native_before
+
         # --- GOG-style nested layout resolves to the game/ subfolder -------
         gog = tmp_path / "gog install"
         build_fixture_game(gog / "game", stock, native=True)

@@ -109,6 +109,7 @@ static void set_drive_cursor_hidden(int hide);
 static void *gamepad;
 static int gamepad_device = -1;
 static unsigned gamepad_idle_polls;
+static void loader_note(const char *message);  /* defined with the logging code */
 static FILE *runtime_log;
 static unsigned runtime_log_lines;
 static volatile int controller_steering_active;
@@ -452,14 +453,38 @@ static short sdl_axis(int axis) {
 static void *sdl_controller_open(int index) {
     return ((void *(*)(int))((uintptr_t)engine + LX_SDL_GAME_CONTROLLER_OPEN_ADDR))(index);
 }
+
+/* The game's main() calls SDL_Init(0x31) - timer, audio, video - and
+ * CChitin::initJoysticks is an empty stub in this build, so the joystick
+ * and gamecontroller subsystems never come up on their own and
+ * SDL_NumJoysticks stays 0 forever. SDL_Init is refcounted, so adding
+ * subsystems the game never asked for is safe before or after its own
+ * call; without this the pad polling on a real Steam Deck sees nothing. */
+static int sdl_init_subsystems(void) {
+    const unsigned want = 0x200u | 0x2000u;  /* JOYSTICK | GAMECONTROLLER */
+    unsigned (*was_init)(unsigned) = (unsigned (*)(unsigned))((uintptr_t)engine + LX_SDL_WAS_INIT_ADDR);
+    if ((was_init(want) & want) == want) return 1;
+    int (*init)(unsigned) = (int (*)(unsigned))((uintptr_t)engine + LX_SDL_INIT_ADDR);
+    return init(want) == 0;
+}
+
 static void open_first_gamepad(void) {
     int count = ((int (*)(void))((uintptr_t)engine + LX_SDL_NUM_JOYSTICKS_ADDR))();
+    if (count <= 0 && !sdl_init_subsystems()) return;
+    count = ((int (*)(void))((uintptr_t)engine + LX_SDL_NUM_JOYSTICKS_ADDR))();
     int (*is_controller)(int) = (int (*)(int))((uintptr_t)engine + LX_SDL_IS_GAME_CONTROLLER_ADDR);
     for (int index = 0; index < count && index < 16; ++index) {
         if (is_controller(index)) {
             gamepad = sdl_controller_open(index);
             gamepad_device = gamepad ? index : -1;
             gamepad_idle_polls = 0;
+            if (gamepad) {
+                const char *(*pad_name)(void *) =
+                    (const char *(*)(void *))((uintptr_t)engine + LX_SDL_GAME_CONTROLLER_NAME_ADDR);
+                char line[256];
+                int n = snprintf(line, sizeof(line), "Pad %d: %s", index, pad_name(gamepad));
+                if (n > 0 && n < (int)sizeof(line)) loader_note(line);
+            }
             return;
         }
     }
@@ -1260,7 +1285,7 @@ static int initialized;
 static int bridge_initialize(void) {
     if (initialized) return 1;
     loader_log = open_side_log("controller-loader.log");
-    loader_note("Controller Lab native bridge 0.2.0 (Linux)");
+    loader_note("Controller Lab native bridge 0.2.1 (Linux)");
     if (!controller_lab_profile()) {
         loader_note("Refused: the isolated Controller Lab profile is missing");
         return 0;
@@ -1268,6 +1293,14 @@ static int bridge_initialize(void) {
     if (!initialize_bindings()) {
         loader_note("Refused: unsupported executable fingerprint");
         return 0;
+    }
+    if (!sdl_init_subsystems()) {
+        loader_note("Warning: SDL_Init(joystick|gamecontroller) failed; retrying at first poll");
+    } else {
+        int count = ((int (*)(void))((uintptr_t)engine + LX_SDL_NUM_JOYSTICKS_ADDR))();
+        char line[64];
+        int n = snprintf(line, sizeof(line), "SDL joystick+gamecontroller up; joysticks=%d", count);
+        if (n > 0 && n < (int)sizeof(line)) loader_note(line);
     }
     if (!install_process_events_filter()) {
         loader_note("Refused: CChitin::ProcessEvents prologue mismatch");
